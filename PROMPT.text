@@ -1,0 +1,185 @@
+this is my service call where we call to customers which service date is due or aane wali hai 
+
+
+
+So here I want some improvements in my code:
+
+
+
+
+
+ Kya, dobra bolo, ya samjh nai aaya so repeat last question smartly,
+
+
+
+Confusion words handle properly and ask smartly and take data 
+
+
+
+Date understand more accurate like monday, somvar, agle week ya hafte, agle mahine,
+
+
+
+If customer silence or not speak anything so so sir kya aap sun paa rahe hai mai puch rahi hu aapke liye ye kab karu retries 3 times when customer not speak anythings and take always perfect and correctly
+
+
+
+when customer ask differ or something not related so say mai kuch smjh nahi paa rahi hu mai bas itna jaana chahti hu ki last question 
+
+
+
+all things understand properly , and ask guine question and give answer properly 
+
+
+
+branch always take correct data
+
+
+
+Date always properly understand deeply and all possible hindi and english both
+
+
+
+english and hindi all keywords understand properly and rural areas wrong pronouns words also understand  
+
+
+
+
+
+
+here are i tells how this works  phone going to customer with this data  curl --location 'http://localhost:3000/outbound/call' \ --header 'Content-Type: application/json' \ --data '{ "to": "+918882374849", "customerName": "Ramesh Sharma", "machineModel": "JCB 3DX", "machineNumber": "RJ14AB1234", "serviceType": "500 Hour Service", "dueDate": "2026-02-28" }' where ai say " mai rajesh JCB motors se priya baat kar rahi hu aapki machine no. {machine number} ki {service name} due hai kya mai aapke liye ye service ek hafte ki koi tarik me ye service book kar du  if yes so ask prefered date and this date date can be anything: monday, kal, parso, newt week, next hafte, agle week, agle hafte, mangalwar or 16 feb , 20 tariq so all of format understand properly if date confirmed so go to next step ask city where machine now here are the list match only these can be if not match so ask again properly then takle perfect city also so tells their full info to save in db if user user apporoved so save in db these data  "customerName": "Ramesh Sharma", "machineModel": "JCB 3DX", "machineNumber": "RJ14AB1234", "serviceType": "500 Hour Service", "dueDate": "2026-02-28", service date: 23/05/2026, customer machine city: alwer, and all conversation export const SERVICE_CENTERS = [ { id:1, city_name:"AJMER", branch_name:"AJMER", branch_code:"1", lat:26.43488884, lng:74.698112488, city_add:"F-100, Road No. 5, Riico Industrial Area, Near Power House, Palra, Ajmer", is_active:1 }, { id:2, city_name:"ALWAR", branch_name:"ALWAR", branch_code:"2", lat:27.582258224, lng:76.647377014, city_add:"Khasra no. 2345, Tuleda Bye Pass, Alwar Bhiwadi Highway Alwar-301001", is_active:1 }, { id:3, city_name:"BANSWARA", branch_name:"UDAIPUR", branch_code:"7", lat:23.563598633, lng:74.417541504, city_add:"Near Nayak Hotel, Udaipur - Dungarpur Link Road, Banswara-327001", is_active:1 }, { id:4, city_name:"BHARATPUR", branch_name:"ALWAR", branch_code:"2", lat:27.201648712, lng:77.46295166, city_add:"Kurka house, Sewar road, Near Jain Mandir, Bharatpur (Raj.)", is_active:1 }, { id:5, city_name:"BHILWARA", branch_name:"BHILWARA", branch_code:"3", lat:25.374652863, lng:74.623023987, city_add:"Kundan Complex, Sukhadiya Circle, Near Bewar Booking, Ajmer Road, Bhilwara", is_active:1 }, { id:6, city_name:"BHIWADI", branch_name:"ALWAR", branch_code:"2", lat:28.202623367, lng:76.808448792, city_add:"Rajesh Motors (Raj.) Pvt. Ltd., Near Hutch Tower, Alwar Bye pass road, Bhiwadi", is_active:1 }, { id:7, city_name:"DAUSA", branch_name:"JAIPUR", branch_code:"4", lat:26.905101776, lng:76.370185852, city_add:"Opp. Anand Goods transport co. Near Saras Dairy Plant, Agra By Pass, N.H-11, Dausa-303303", is_active:1 }, { id:8, city_name:"DHOLPUR", branch_name:"ALWAR", branch_code:"2", lat:26.693515778, lng:77.876922607, city_add:"Bharatpur Road, Layania Marriage Home, Dholpur", is_active:1 }, { id:9, city_name:"DUNGARPUR", branch_name:"UDAIPUR", branch_code:"7", lat:23.844612122, lng:73.737922668, city_add:"T.P.Complex Shopno 1-2 Nr. Reliance Petrol Pump, Sagwara Road, Dunagarpur", is_active:1 }, { id:10, city_name:"GONER ROAD", branch_name:"JAIPUR", branch_code:"4", lat:26.889762878, lng:75.873939514, city_add:"72, Goner Turn, Agra Road, Jaipur-302004, Rajasthan.", is_active:1 }, { id:11, city_name:"JAIPUR", branch_name:"JAIPUR", branch_code:"4", lat:26.865495682, lng:75.681541443, city_add:"Khasra No. 1170-1175, Near Delhi Public School, Bhankrota, Ajmer Road, Jaipur, Rajasthan-302026", is_active:1 }, { id:12, city_name:"JHALAWAR", branch_name:"KOTA", branch_code:"5", lat:24.547901154, lng:76.194129944, city_add:"Opp. Roop Nagar Colony, Kota Road, Jhalawar", is_active:1 }, { id:13, city_name:"JHUNJHUNU", branch_name:"SIKAR", branch_code:"6", lat:28.09862709, lng:75.374809265, city_add:"Opp. Police Line, Near Railway Crossing, Phase-2, Riico, Jhunjhunu", is_active:1 }, { id:14, city_name:"KARAULI", branch_name:"JAIPUR", branch_code:"4", lat:26.512748718, lng:77.021934509, city_add:"Infront of S.P. Office, Shukla Colony Corner, Mandrayal Road, Karauli", is_active:1 }, { id:15, city_name:"KEKRI", branch_name:"AJMER", branch_code:"1", lat:25.961145401, lng:75.157318115, city_add:"Ajmer Road, Near Peer Baba, Near R.T.O. Office, Kekri-305404", is_active:1 }, { id:16, city_name:"KOTA", branch_name:"KOTA", branch_code:"5", lat:25.12909317, lng:75.868736267, city_add:"B-259, Ipia Road No-06, Near Railway Flyover, Kota", is_active:1 }, { id:17, city_name:"KOTPUTLI", branch_name:"JAIPUR", branch_code:"4", lat:27.680557251, lng:76.160636902, city_add:"C/o Old Vijay Automobile N.H.8, Teh. Kotputli, Distt. Jaipur (Raj.)", is_active:1 }, { id:18, city_name:"NEEM KA THANA", branch_name:"JAIPUR", branch_code:"4", lat:27.741991043, lng:75.788673401, city_add:"Opp. Jodla Johra, Neem Ka Thana, Dist. Sikar", is_active:1 }, { id:19, city_name:"NIMBAHERA", branch_name:"BHILWARA", branch_code:"3", lat:24.617570877, lng:74.672302246, city_add:"Near Mahaveer Rastaurant, Eidgah Chauraha, Udaipur Road, Nimbahera-312602", is_active:1 }, { id:20, city_name:"PRATAPGARH", branch_name:"BHILWARA", branch_code:"3", lat:24.038845062, lng:74.776138306, city_add:"Ambedkar Circle, Near Anand Service Centre, Opp. Bank Of India, Pratapgarh", is_active:1 }, { id:21, city_name:"RAJSAMAND", branch_name:"UDAIPUR", branch_code:"7", lat:25.078897476, lng:73.866836548, city_add:"Near Indusind Bank Ltd. Tvs Chouraha, Shrinath Hotel, Kankroli, Rajsamand", is_active:1 }, { id:22, city_name:"RAMGANJMANDI", branch_name:"KOTA", branch_code:"5", lat:24.655239105, lng:75.971496582, city_add:"Near Reliance Petrol Pump, Suket Road, Ramganj Mandi.", is_active:1 }, { id:23, city_name:"SIKAR", branch_name:"SIKAR", branch_code:"6", lat:27.591619492, lng:75.171058655, city_add:"Opp. Parnami Motors, Near Circuit House, Jaipur Road, Sikar", is_active:1 }, { id:25, city_name:"SUJANGARH", branch_name:"SIKAR", branch_code:"6", lat:27.706758499, lng:74.481445312, city_add:"Opp. Krishi Upaj Mandi, Salasar Road, Sujangarh, Distt. Churu PIN:331507", is_active:1 }, { id:26, city_name:"TONK", branch_name:"JAIPUR", branch_code:"4", lat:26.177381516, lng:75.81086731, city_add:"Plot No.5, Captain Colony, Jaipur Road, Tonk, Distt. Tonk (Raj.)", is_active:1 }, { id:27, city_name:"UDAIPUR", branch_name:"UDAIPUR", branch_code:"7", lat:24.570493698, lng:73.745994568, city_add:"A-83, Road No. 1, Mewar Industrial Area, Madri, Udaipur (Raj.)", is_active:1 }, { id:28, city_name:"VKIA", branch_name:"JAIPUR", branch_code:"4", lat:27.0103827, lng:75.7703344, city_add:"2nd Rd, New Karni Colony, Kishan Vatika, Ganesh Nagar, Jaipur, Rajasthan 302013", is_active:1 }, ];   next handle by ai all confussion, repeated word, hinglish or wrong pronouns words also  if customer ask anything so give answer smartly if customer reject or say abhi nahi bussy hu ya abhi nahi chaiye aur any words so handle smartly and ask reason and then ask a prefered date for service if possible or reshedule calling if customer say already done so ask deatils when , where or which provider then save in db with status  after talking all conversation then say thank you and save data in db and cut callthis is
+
+
+
+
+
+
+
+THE COMPLETE CALL JOURNEY:
+STEP 1: Call Starts (handleInitialCall)
+
+Customer receives the call
+System gets the call ID (CallSid) from Twilio
+System checks if customer info exists (from memory store)
+If new call → Creates a new Call record in database with:
+
+Phone number
+Customer name
+Machine details (model, serial number)
+Service type
+Due date
+
+
+Records the start time
+Agent speaks in Hindi: "Hello! Can I speak with [Name]? Your [Machine Model] needs service."
+Waits for customer to respond
+
+
+STEP 2: Customer Speaks (handleUserInput - Part 1)
+
+Customer responds
+System captures the speech and converts to text
+If customer says nothing → asks them to repeat
+If customer speaks → continues to next step
+
+
+STEP 3: AI Processes Response
+
+System sends all previous messages + new customer message to AI (Groq)
+AI reads the conversation history
+AI understands what customer said in context
+AI generates a response in Hindi
+
+
+STEP 4: Check for Booking Intent
+
+System looks at AI response for booking decision
+AI might say one of 3 things:
+
+✅ "Confirmed" → Customer agrees to book a date
+⏭️ "Already Done" → Customer says service was already done
+📅 "Rescheduled" → Customer wants to reschedule
+
+
+
+
+STEP 5A: If Service is CONFIRMED
+
+System extracts the service date
+Finds the nearest service center/branch in customer's city
+Saves to database:
+
+Confirmed date
+Branch name & location
+Branch code
+
+
+Marks outcome as "confirmed"
+Agent thanks customer in Hindi and hangs up
+Call is marked as "completed"
+
+
+STEP 5B: If Service Already DONE
+
+System records where it was done (location)
+Marks outcome as "already_done"
+Agent says thank you and hangs up
+Call is marked as "completed"
+
+
+STEP 5C: If No Booking Yet
+
+AI response continues conversation
+System saves AI message
+Agent speaks the AI response
+Waits for next customer response
+Turn counter increases by 1
+
+
+STEP 6: Safety Limit (Infinite Loop Protection)
+
+If conversation reaches 12 turns (customer + agent = 12 exchanges)
+System automatically:
+
+Stops the call
+Says polite goodbye in Hindi
+Hangs up
+Marks call as completed
+Records total duration
+
+
+
+
+WHAT GETS SAVED TO DATABASE (Full Call Record):
+CallSid: "CA1234xyz"
+Customer: John Doe
+Phone: +91-9999999999
+Machine: AC Model X500, Serial #ABC123
+Service Due: 30-Jan-2024
+
+Messages (Full Transcript):
+- Assistant: "Namaste! Ek minute..."
+- User: "Haan, baat kar sakte ho"
+- Assistant: "Aapke liye 15 Feb available hai?"
+- User: "Haan theek hai"
+
+Transcript (Formatted):
+assistant: Namaste! Ek minute...
+user: Haan, baat kar sakte ho
+assistant: Aapke liye 15 Feb available hai?
+user: Haan theek hai
+
+Call Details:
+- Started: 2024-01-25 10:30:00
+- Ended: 2024-01-25 10:45:00
+- Duration: 15 minutes
+- Total Turns: 4
+
+Booking Confirmed:
+- Service Date: 2024-02-15
+- Service Date (Readable): "15 February 2024"
+- Branch: "Delhi West Center"
+- Branch Code: "DL-W-001"
+
+Outcome: "confirmed"
+Status: "completed"
