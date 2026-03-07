@@ -153,11 +153,11 @@ router.post('/', async (req, res) => {
     const gather = twiml.gather({
       input: 'speech',
       language: 'hi-IN',
-      speechTimeout: 5,
-      timeout: 8,
+      speechTimeout: 'auto', // Stop recording instantly after they finish speaking
+      timeout: 5,           // Reduced wait time for initial input
       action: `/voice/process?callSid=${CallSid}`,
       method: 'POST',
-      maxSpeechTime: 15,
+      maxSpeechTime: 15,    // Max allowed speech duration
       numDigits: 1
     });
 
@@ -342,8 +342,8 @@ router.post('/process', async (req, res) => {
       const gather = twiml.gather({
         input: 'speech',
         language: 'hi-IN',
-        speechTimeout: 5,
-        timeout: 8,
+        speechTimeout: 'auto', // Instantly capture speech without a 5s silent delay
+        timeout: 5,           // Wait max 5 seconds before giving up initially
         action: `/voice/process?callSid=${callSid}`,
         method: 'POST',
         maxSpeechTime: 15,

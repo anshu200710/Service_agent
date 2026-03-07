@@ -157,7 +157,7 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
     try {
       response = await groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
-        max_tokens: 512,
+        max_tokens: 150, // Reduced from 512 for much faster response latency
         messages: messagesWithSystem,
         temperature: 0.7
       });
@@ -517,7 +517,7 @@ export async function generateGoogleTTS(text) {
   const request = {
     input: { text: cleanText },
     voice: { languageCode: 'hi-IN', name: 'hi-IN-Neural2-D' }, // Warm & Professional
-    audioConfig: { audioEncoding: 'MP3', speakingRate: 1.0 },
+    audioConfig: { audioEncoding: 'MP3', speakingRate: 1.15 }, // Increased speed for snappier responses
   };
 
   try {
