@@ -104,8 +104,8 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
       };
     }
 
-    // ✅ CHECK SAFETY LIMIT (max 12 turns)
-    if (turnCount >= 12) {
+    // ✅ CHECK SAFETY LIMIT (max 20 turns)
+    if (turnCount >= 20) {
       console.warn(`⚠️  [AI] Safety limit reached: ${turnCount} turns`);
       return {
         text: 'Dhanyavaad! Aapka booking request store ho gaya. Hum jald contact karenge. Namaste!',
@@ -285,6 +285,11 @@ IF FIRST MESSAGE (empty conversation):
 → Ask if they want to book
 Example: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} (${customerData.machineNumber}) ki ${customerData.serviceType} due hai. Kya aap book karna chahenge?"
 
+IF CUSTOMER ASKS QUESTIONS:
+→ You are a professional, highly capable Customer Service Agent.
+→ Actively answer their questions about JCB machinery, services, maintenance, or Rajesh Motors perfectly and correctly.
+→ After answering their query, smoothly steer the conversation back to booking the service date.
+
 IF CUSTOMER SAYS YES:
 → Ask for preferred service date
 → Accept: "kal", "parso", day names, dates like "16 Feb"
@@ -314,10 +319,10 @@ CRITICAL RULES:
 ═══════════════════════════════════════════════════════════════════════════
 ✅ ALWAYS use "${customerData.customerName}" in response (not generic "you")
 ✅ ALWAYS mention their "${customerData.machineModel}" model
-✅ Keep responses SHORT (1-2 Hindi sentences max)
-✅ Speak naturally in Hindi/Hinglish
-✅ Be warm and professional
-✅ Listen carefully to what customer says
+✅ Keep responses CONCISE (1-3 Hindi sentences max)
+✅ Speak naturally in Hindi/Hinglish with a warm, empathetic, and professional tone
+✅ ONLY ACCEPT FUTURE DATES for booking. If they mention a past date, politely inform them to pick a future date.
+✅ Listen carefully to what customer says and clear all their doubts effectively
 ✅ Never make assumptions
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -439,7 +444,12 @@ export function matchServiceCenter(cityText) {
 export function parseDate(dateText) {
   if (!dateText || dateText.trim().length === 0) return null;
   
-  const today = new Date();
+  // Ensure we use IST (Indian Standard Time) to prevent timezone issues where UTC server is on previous day
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const today = new Date(utc + (3600000 * 5.5)); 
+  today.setHours(0, 0, 0, 0); // Start of day
+
   const text = dateText.toLowerCase().trim();
 
   // Tomorrow (kal)
@@ -477,7 +487,7 @@ export function parseDate(dateText) {
   }
 
   // Date format: "16 feb", "16 tarik"
-  const dateMatch = text.match(/(\d{1,2})\s*(feb|tarik|jan|march|april|may)/i);
+  const dateMatch = text.match(/(\d{1,2})\s*(tarik|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
   if (dateMatch) {
     const day = parseInt(dateMatch[1]);
     if (day >= 1 && day <= 31) {
@@ -486,6 +496,11 @@ export function parseDate(dateText) {
       if (date < today) date.setMonth(date.getMonth() + 1);
       return date;
     }
+  }
+
+  // Today (aaj)
+  if (text.includes('aaj')) {
+    return today;
   }
 
   // Next week
