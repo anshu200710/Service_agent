@@ -298,7 +298,7 @@ STRICT CONVERSATION STEPS:
    - If user says a date, confirm it and move to Step 7.
    - NEVER skip to city until DATE is confirmed.
 
-7. STEP 3 (CITY): After date is confirmed, ask "Abhi machine kaunsi city me hai? Jaise: ${exampleCities}?". 
+7. STEP 3 (CITY): After date is confirmed, ask "Apka Near Service Station Kon Sa hai ? Jaise: ${exampleCities}?". 
    - If user names a city NOT in the internal reference list, say: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni main registered city btaiye."
 
 8. FINAL CONFIRMATION: Repeat Name, Machine, Date, City and ask "Kya ye details theek hain? Final lock kar doon?".
@@ -478,7 +478,7 @@ export function parseDate(dateText) {
     const day = parseInt(numericMatch[1]);
     const month = parseInt(numericMatch[2]) - 1; // 0-indexed
     const yearMatch = numericMatch[4];
-    
+
     const target = new Date(today);
     target.setDate(day);
     target.setMonth(month);
@@ -496,19 +496,19 @@ export function parseDate(dateText) {
   // 6. Text Date format: "16 feb", "16 March", "28 Feb"
   const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const dateMatch = text.match(/(\d{1,2})\s*(tarik|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
-  
+
   if (dateMatch) {
     const day = parseInt(dateMatch[1]);
     const monthText = dateMatch[2].substring(0, 3).toLowerCase();
     const monthIndex = months.indexOf(monthText);
-    
+
     if (day >= 1 && day <= 31) {
       const target = new Date(today);
       target.setDate(day);
       if (monthIndex !== -1) {
         target.setMonth(monthIndex);
       }
-      
+
       // If the target date is in the past, move to next year
       if (target < today) {
         target.setFullYear(target.getFullYear() + 1);
