@@ -251,6 +251,7 @@ function getErrorResponse(text, intent = 'error') {
  */
 function buildSystemPrompt(customerData) {
   const serviceCenterList = SERVICE_CENTERS.map(s => s.city_name).join(', ');
+  const exampleCities = "Jaipur, Ajmer, Udaipur";
 
   let dueDateStr = 'Soon';
   if (customerData.dueDate) {
@@ -276,8 +277,9 @@ Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates
 
 CRITICAL RULES (Mandatory):
 ✅ JSON: You MUST append the BOOKING_STATE JSON block to the END of EVERY single response.
-✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined". NEVER use "in_progress".
-✅ SPECIFIC DATES: In "dateValue", NEVER put relative terms like "next week". Calculate the SPECIFIC date (e.g., "18 March 2026") based on Today and put that in the JSON.
+✅ NO CITY LISTS: Never list all allowed cities to the customer. Only use 2-3 examples like "${exampleCities}".
+✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined".
+✅ SPECIFIC DATES: Calculate the SPECIFIC date (e.g., "18 March 2026") for the JSON.
 ✅ CONCISE: Max 2 sentences per response. 
 
 STRICT CONVERSATION STEPS:
@@ -296,13 +298,15 @@ STRICT CONVERSATION STEPS:
    - If user says a date, confirm it and move to Step 7.
    - NEVER skip to city until DATE is confirmed.
 
-7. STEP 3 (CITY): After date is confirmed, ask "Abhi machine kaunsi city me hai?". 
-   - Accept ONLY: ${serviceCenterList}
-   - If city NOT in list: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni registered city ya koi dusri main city btaiye."
+7. STEP 3 (CITY): After date is confirmed, ask "Abhi machine kaunsi city me hai? Jaise: ${exampleCities}?". 
+   - If user names a city NOT in the internal reference list, say: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni main registered city btaiye."
 
 8. FINAL CONFIRMATION: Repeat Name, Machine, Date, City and ask "Kya ye details theek hain? Final lock kar doon?".
 
 9. ENDING: If YES, say "Dhanyavaad ${customerData.customerName} ji, booking confirm ho gayi. Namaste!" and set status to "confirmed".
+
+ALLOWED CITIES (INTERNAL REFERENCE - DO NOT LIST TO CUSTOMER):
+${serviceCenterList}
 
 RESPONSE FORMAT (STRICT):
 BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"DD Month YYYY","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
