@@ -157,7 +157,7 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
     try {
       response = await groq.chat.completions.create({
         model: 'llama-3.1-8b-instant',
-        max_tokens: 150, // Reduced from 512 for much faster response latency
+        max_tokens: 256, // Increased from 150 to prevent truncation of JSON block
         messages: messagesWithSystem,
         temperature: 0.7
       });
@@ -272,11 +272,13 @@ function buildSystemPrompt(customerData) {
 You speak warm, friendly Hindi/Hinglish. ALWAYS use the name ${customerData.customerName}.
 
 CRITICAL: TODAY IS ${currentDateStr}. 
-Any date suggested must be TODAY or in the FUTURE. Never suggest or accept dates in the past.
+Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates in the past.
 
-CUSTOMER INFO:
-Name: ${customerData.customerName} | Machine: ${customerData.machineModel} (${customerData.machineNumber})
-Service: ${customerData.serviceType} | Due: ${dueDateStr}
+CRITICAL RULES (Mandatory):
+✅ JSON: You MUST append the BOOKING_STATE JSON block to the END of EVERY single response.
+✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined". NEVER use "in_progress".
+✅ SPECIFIC DATES: In "dateValue", NEVER put relative terms like "next week". Calculate the SPECIFIC date (e.g., "18 March 2026") based on Today and put that in the JSON.
+✅ CONCISE: Max 2 sentences per response. 
 
 STRICT CONVERSATION STEPS:
 1. GREETING: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} की ${customerData.serviceType} due hai. Kya main ise book kar doon?"
@@ -302,14 +304,8 @@ STRICT CONVERSATION STEPS:
 
 9. ENDING: If YES, say "Dhanyavaad ${customerData.customerName} ji, booking confirm ho gayi. Namaste!" and set status to "confirmed".
 
-CRITICAL RULES:
-✅ CONCISE: Max 2 sentences. 
-✅ JSON: Append BOOKING_STATE JSON to every response.
-✅ SEQUENTIAL: Never ask for city before date is confirmed.
-✅ NO CITY GUESSING: Never auto-fill a city. Use only what customer says.
-
-RESPONSE FORMAT:
-BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
+RESPONSE FORMAT (STRICT):
+BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"DD Month YYYY","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
 `;
 }
 
@@ -338,19 +334,14 @@ function parseAIResponse(aiText) {
       text = aiText.split('BOOKING_STATE:')[0].trim();
 
       console.log(`✅ [PARSE] State: intent=${extractedData.intent}, status=${extractedData.status}`);
-
-      if (extractedData.hasDate) {
-        console.log(`   ✅ Date extracted: ${extractedData.dateValue}`);
-      }
-      if (extractedData.hasCity) {
-        console.log(`   ✅ City extracted: ${extractedData.cityValue}`);
-      }
     } else {
-      console.warn('⚠️  [PARSE] No BOOKING_STATE found in response');
+      console.warn('⚠️  [PARSE] No BOOKING_STATE found in response. Using previous context.');
+      // If JSON is missing, we try to preserve what we had or stay in "pending"
     }
   } catch (parseError) {
     console.warn('⚠️  [PARSE] Failed to parse BOOKING_STATE:', parseError.message);
-    text = aiText;
+    // If it's a partial JSON, try to extract as much as possible
+    text = aiText.split('BOOKING_STATE:')[0].trim();
   }
 
   // Determine if call should end based on status
@@ -477,7 +468,28 @@ export function parseDate(dateText) {
     }
   }
 
-  // 5. Date format: "16 feb", "16 March", "28 Feb"
+  // 5. Numeric Date format: "28/2/2026", "28-02", "28.02"
+  const numericMatch = text.match(/(\d{1,2})[\/\-\.](\d{1,2})([\/\-\.](\d{2,4}))?/);
+  if (numericMatch) {
+    const day = parseInt(numericMatch[1]);
+    const month = parseInt(numericMatch[2]) - 1; // 0-indexed
+    const yearMatch = numericMatch[4];
+    
+    const target = new Date(today);
+    target.setDate(day);
+    target.setMonth(month);
+    if (yearMatch) {
+      const year = yearMatch.length === 2 ? 2000 + parseInt(yearMatch) : parseInt(yearMatch);
+      target.setFullYear(year);
+    }
+
+    if (target < today) {
+      target.setFullYear(target.getFullYear() + 1);
+    }
+    return target;
+  }
+
+  // 6. Text Date format: "16 feb", "16 March", "28 Feb"
   const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const dateMatch = text.match(/(\d{1,2})\s*(tarik|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
   
@@ -501,7 +513,7 @@ export function parseDate(dateText) {
     }
   }
 
-  // 6. Next week
+  // 7. Next week
   if (text.includes('next') || text.includes('agle') || text.includes('agla')) {
     const nextWeek = new Date(today);
     nextWeek.setDate(nextWeek.getDate() + 7);

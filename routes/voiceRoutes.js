@@ -256,9 +256,11 @@ router.post('/process', async (req, res) => {
     if (aiResponse.extractedData.hasDate && aiResponse.extractedData.dateValue) {
       const parsedDate = parseDate(aiResponse.extractedData.dateValue);
       if (parsedDate) {
-        callDoc.booking.confirmedServiceDate = aiResponse.extractedData.dateValue;
+        // Format to "DD-MM-YYYY" for clear display
+        const formattedDate = parsedDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+        callDoc.booking.confirmedServiceDate = formattedDate;
         callDoc.booking.confirmedServiceDateISO = parsedDate;
-        console.log(`   ✅ Service date extracted: ${aiResponse.extractedData.dateValue}`);
+        console.log(`   ✅ Service date extracted: ${formattedDate} (from raw: ${aiResponse.extractedData.dateValue})`);
       }
     }
 
@@ -273,8 +275,9 @@ router.post('/process', async (req, res) => {
       }
     }
 
-    // Update outcome if status changed
-    if (aiResponse.extractedData.status && aiResponse.extractedData.status !== 'pending') {
+    // Update outcome if status changed and is a valid enum value
+    const validOutcomes = ['confirmed', 'already_done', 'declined'];
+    if (aiResponse.extractedData.status && validOutcomes.includes(aiResponse.extractedData.status)) {
       callDoc.outcome = aiResponse.extractedData.status;
       console.log(`   ✅ Outcome set to: ${aiResponse.extractedData.status}`);
     }
