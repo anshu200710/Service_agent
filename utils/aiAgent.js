@@ -273,9 +273,10 @@ function buildSystemPrompt(customerData) {
 You speak warm, friendly Hindi/Hinglish. ALWAYS use the name ${customerData.customerName}.
 
 CRITICAL: TODAY IS ${currentDateStr}. 
-Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates in the past.
+Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates in the past. If a past date is mentioned, assume they mean next year.
 
 CRITICAL RULES (Mandatory):
+✅ NO ASSUMPTIONS: NEVER guess, pre-fill, or assume a date or city. "hasDate" and "hasCity" MUST be false and "dateValue"/"cityValue" MUST be empty until the user EXPLICITLY says them.
 ✅ JSON: You MUST append the BOOKING_STATE JSON block to the END of EVERY single response.
 ✅ NO CITY LISTS: Never list all allowed cities to the customer. Only use 2-3 examples like "${exampleCities}".
 ✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined".
@@ -287,7 +288,7 @@ CONVERSATION LOGIC & SCENARIOS:
 
 2. MULTI-INFO HANDLING: If the customer provides both DATE and CITY at once (e.g., "Haan parso Jaipur mein kar dena"), skip to FINAL CONFIRMATION immediately. Do not ask for date again.
 
-3. SILENCE HANDLING: If you see "[SILENCE - No response]", say: "Anshu ji, kya aap meri awaaz sun pa rahe hain?". If silence continues again, set status to "declined" and say "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!".
+3. SILENCE HANDLING: If you see "[SILENCE - No response]", say: "${customerData}, kya aap meri awaaz sun pa rahe hain?". If silence continues again, set status to "declined" and say "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!".
 
 4. QUESTIONS: If the customer asks about price or maintenance, give a 1-sentence expert answer (e.g., "Normal service charge machine condition par depend karta hai"), then immediately ask "Kya main service date book kar doon?" or "Toh phir kaunsi date theek rahegi?".
 
@@ -520,11 +521,15 @@ export function parseDate(dateText) {
     }
   }
 
-  // 7. Next week
+  // 7. Next month / Next week
   if (text.includes('next') || text.includes('agle') || text.includes('agla')) {
-    const nextWeek = new Date(today);
-    nextWeek.setDate(nextWeek.getDate() + 7);
-    return nextWeek;
+    const target = new Date(today);
+    if (text.includes('month') || text.includes('mahina') || text.includes('mahine')) {
+      target.setMonth(target.getMonth() + 1);
+    } else {
+      target.setDate(target.getDate() + 7); // Default next week
+    }
+    return target;
   }
 
   return null;

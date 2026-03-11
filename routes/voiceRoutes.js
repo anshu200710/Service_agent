@@ -99,18 +99,23 @@ function sendErrorTwiml(res, message) {
  * This is STEP 1 in the call flow
  */
 router.post('/', async (req, res) => {
-  try {
-    const { CallSid } = req.body;
+  const { CallSid } = req.body;
 
+  if (!CallSid) {
+    console.error('❌ Missing CallSid in request');
+    return sendErrorTwiml(res, 'System error. Call failed.');
+  }
+
+  // Prevent double initiation
+  if (!(await acquireLock(CallSid))) {
+    return res.status(200).send();
+  }
+
+  try {
     console.log('\n' + '='.repeat(70));
     console.log(`📞 [VOICE] STEP 1: Call Answered`);
     console.log(`   CallSid: ${CallSid}`);
     console.log('='.repeat(70));
-
-    if (!CallSid) {
-      console.error('❌ Missing CallSid in request');
-      return sendErrorTwiml(res, 'System error. Call failed.');
-    }
 
     // ✅ FETCH CALL FROM DATABASE
     const callDoc = await Call.findOne({ callSid: CallSid });
@@ -123,13 +128,11 @@ router.post('/', async (req, res) => {
     callDoc.status = 'in_progress';
     callDoc.callStartedAt = new Date();
     callDoc.totalTurns = 0;
-    // callDoc.messages = []; // Handled by new silence logic
     await callDoc.save();
 
     console.log(`✅ Call status updated to 'in_progress' for: ${callDoc.customerName}`);
 
-    // ✅ GET AI GREETING (first message, turn = 0)
-    console.log(`\n🤖 Generating AI greeting...`);
+    // ✅ GET AI GREETING
     const aiResponse = await getAIResponse([], {
       customerName: callDoc.customerName,
       customerPhone: callDoc.customerPhone,
@@ -140,14 +143,6 @@ router.post('/', async (req, res) => {
       dueDate: callDoc.dueDate
     }, 0);
 
-    if (!aiResponse || !aiResponse.text) {
-      console.error('❌ AI response is empty');
-      return sendErrorTwiml(res, 'AI service error. Please try again later.');
-    }
-
-    console.log(`✅ AI greeting generated`);
-    console.log(`   Text: "${aiResponse.text.substring(0, 70)}..."`);
-
     // ✅ SAVE AI GREETING TO DATABASE
     callDoc.messages.push({
       role: 'assistant',
@@ -155,7 +150,6 @@ router.post('/', async (req, res) => {
       timestamp: new Date()
     });
     await callDoc.save();
-    console.log(`✅ Greeting saved to database`);
 
     // ✅ BUILD TWIML RESPONSE WITH GATHER
     const twiml = new twilio.twiml.VoiceResponse();
@@ -163,26 +157,22 @@ router.post('/', async (req, res) => {
       input: 'speech',
       language: 'hi-IN',
       speechTimeout: 'auto', 
-      timeout: 5,           // Initial greeting timeout
+      timeout: 5,
       action: `/voice/process?callSid=${CallSid}`,
       method: 'POST',
-      maxSpeechTime: 15,    
-      numDigits: 1
+      maxSpeechTime: 15
     });
 
-    // ✅ USE ELEVENLABS FOR GREETING
     await sayWithClarity(gather, aiResponse.text, true);
 
     console.log(`📤 Sending greeting to: ${callDoc.customerName}`);
-    console.log(`   Voice: 🎙️ Google TTS`);
-    console.log(`   Waiting for customer speech...\n`);
-
     res.type('text/xml').send(twiml.toString());
 
   } catch (error) {
-    console.error(`\n❌ [VOICE] Error in initial webhook:`, error.message);
-    console.error(`   Stack:`, error.stack);
+    console.error(`❌ [VOICE] Error in initial webhook:`, error.message);
     return sendErrorTwiml(res, 'System error. Call failed.');
+  } finally {
+    releaseLock(CallSid);
   }
 });
 
