@@ -28,7 +28,7 @@ let groqInitialized = false;
 
 try {
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  
+
   if (!apiKey) {
     console.error('❌ [AI] GROQ_API_KEY is not set in environment variables');
     console.error('   Please add GROQ_API_KEY to your .env file');
@@ -125,7 +125,7 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
 
     // ✅ BUILD SYSTEM PROMPT WITH CUSTOMER DATA
     const systemPrompt = buildSystemPrompt(customerData);
-    
+
     // Format messages for Groq API
     let formattedMessages = messages.map(m => ({
       role: m.role === 'user' ? 'user' : 'assistant',
@@ -165,28 +165,28 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
       console.log(`✅ [AI] Groq API response received successfully`);
     } catch (apiError) {
       console.error(`❌ [AI] Groq API error:`, apiError.message);
-      
+
       if (apiError.status === 401 || apiError.status === 403) {
         console.error(`   → Authentication error: Invalid or expired API key`);
         return getErrorResponse('API key invalid. Admin ko notify kar diya jayega.', 'auth_error');
       }
-      
+
       if (apiError.status === 429) {
         console.error(`   → Rate limit exceeded`);
         return getErrorResponse('System busy hai. Baad mein try karenge.', 'rate_limit');
       }
-      
+
       if (apiError.status === 500) {
         console.error(`   → Groq server error`);
         return getErrorResponse('Service down. Baad mein try karenge.', 'server_error');
       }
-      
+
       throw apiError;
     }
 
     // ✅ EXTRACT AI TEXT FROM RESPONSE
     const aiText = response.choices?.[0]?.message?.content;
-    
+
     if (!aiText || aiText.trim().length === 0) {
       console.error('❌ [AI] Empty response content from Groq');
       return {
@@ -221,7 +221,7 @@ export async function getAIResponse(messages, customerData, turnCount = 0) {
   } catch (error) {
     console.error(`\n❌ [AI] Unhandled error in getAIResponse:`, error.message);
     console.error(`   Type: ${error.name}`);
-    
+
     return getErrorResponse('Kshama kijiye, system mein issue hai. Baad mein try karenge.', 'unknown_error');
   }
 }
@@ -251,7 +251,7 @@ function getErrorResponse(text, intent = 'error') {
  */
 function buildSystemPrompt(customerData) {
   const serviceCenterList = SERVICE_CENTERS.map(s => s.city_name).join(', ');
-  
+
   let dueDateStr = 'Soon';
   if (customerData.dueDate) {
     try {
@@ -262,78 +262,54 @@ function buildSystemPrompt(customerData) {
     }
   }
 
-  return `You are Priya, a professional JCB service booking assistant for Rajesh Motors.
-You speak warm, friendly Hindi/Hinglish naturally. ALWAYS personalize with customer names and details.
+  // FORCE IST TIME (Current date for the AI)
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const today = new Date(utc + (3600000 * 5.5));
+  const currentDateStr = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
 
-═══════════════════════════════════════════════════════════════════════════
-CUSTOMER INFORMATION (ALWAYS USE IN RESPONSES):
-═══════════════════════════════════════════════════════════════════════════
-Name: ${customerData.customerName}
-Phone: ${customerData.customerPhone}
-Machine: ${customerData.machineModel} (Serial: ${customerData.machineNumber})
-Service Type: ${customerData.serviceType}
-Service Due: ${dueDateStr}
+  return `You are Priya, a professional JCB service booking assistant for Rajesh Motors. 
+You speak warm, friendly Hindi/Hinglish. ALWAYS use the name ${customerData.customerName}.
 
-═══════════════════════════════════════════════════════════════════════════
-YOUR CONVERSATION FLOW (Follow Strictly):
-═══════════════════════════════════════════════════════════════════════════
+CRITICAL: TODAY IS ${currentDateStr}. 
+Any date suggested must be TODAY or in the FUTURE. Never suggest or accept dates in the past.
 
-IF FIRST MESSAGE (empty conversation):
-→ Warm greeting with NAME
-→ Mention MACHINE MODEL and NUMBER
-→ Say SERVICE TYPE is due
-→ Ask if they want to book
-Example: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} (${customerData.machineNumber}) ki ${customerData.serviceType} due hai. Kya aap book karna chahenge?"
+CUSTOMER INFO:
+Name: ${customerData.customerName} | Machine: ${customerData.machineModel} (${customerData.machineNumber})
+Service: ${customerData.serviceType} | Due: ${dueDateStr}
 
-IF CUSTOMER ASKS QUESTIONS:
-→ You are a professional, highly capable Customer Service Agent.
-→ Actively answer their questions about JCB machinery, services, maintenance, or Rajesh Motors perfectly and correctly.
-→ After answering their query, smoothly steer the conversation back to booking the service date.
+STRICT CONVERSATION STEPS:
+1. GREETING: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} की ${customerData.serviceType} due hai. Kya main ise book kar doon?"
 
-IF CUSTOMER SAYS YES:
-→ Ask for preferred service date
-→ Accept: "kal", "parso", day names, dates like "16 Feb"
-→ Confirm the date
+2. IF CUSTOMER ASKS QUESTIONS: Give a 1-sentence expert answer about JCB parts, cost, or maintenance, then immediately ask for Date or City.
 
-IF CUSTOMER SAYS NO:
-→ Offer to reschedule
-→ If they decline: End call politely
+3. IF CUSTOMER SAYS YES: Ask for preferred service date (kal, parso, or any date).
 
-ONCE DATE IS CONFIRMED:
-→ Ask for city/location
-→ ONLY accept cities from this list: ${serviceCenterList}
-→ Match their city to correct service center
+4. IF CUSTOMER SAYS NO: Ask reason and offer to reschedule: "Koi baat nahi, kya main aapko agle hafte call karoon?"
 
-FINAL STEP:
-→ Repeat ALL details back
-→ Ask final confirmation
-→ If YES: "Booking confirm ho gayi! Aapka appointment book ho gaya."
-→ If NO: "Kya change karna hai?"
+5. IF CUSTOMER SAYS "ALREADY DONE": Ask "Kab aur kahan karwai thi?" then say "Theek hai, main record up-to-date kar deti hoon. Dhanyavaad!" and set status to "already_done".
 
-IF CUSTOMER SAYS "ALREADY DONE":
-→ Ask when and where
-→ Thank them and end call
+6. STEP 2 (DATE): Ask for the service date. 
+   - Accept: "Aaj", "Kal", "Parso", day names, or specific dates.
+   - If user says a date, confirm it and move to Step 7.
+   - NEVER skip to city until DATE is confirmed.
 
-═══════════════════════════════════════════════════════════════════════════
+7. STEP 3 (CITY): After date is confirmed, ask "Abhi machine kaunsi city me hai?". 
+   - Accept ONLY: ${serviceCenterList}
+   - If city NOT in list: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni registered city ya koi dusri main city btaiye."
+
+8. FINAL CONFIRMATION: Repeat Name, Machine, Date, City and ask "Kya ye details theek hain? Final lock kar doon?".
+
+9. ENDING: If YES, say "Dhanyavaad ${customerData.customerName} ji, booking confirm ho gayi. Namaste!" and set status to "confirmed".
+
 CRITICAL RULES:
-═══════════════════════════════════════════════════════════════════════════
-✅ ALWAYS use "${customerData.customerName}" in response (not generic "you")
-✅ ALWAYS mention their "${customerData.machineModel}" model
-✅ Keep responses CONCISE (1-3 Hindi sentences max)
-✅ Speak naturally in Hindi/Hinglish with a warm, empathetic, and professional tone
-✅ ONLY ACCEPT FUTURE DATES for booking. If they mention a past date, politely inform them to pick a future date.
-✅ Listen carefully to what customer says and clear all their doubts effectively
-✅ Never make assumptions
+✅ CONCISE: Max 2 sentences. 
+✅ JSON: Append BOOKING_STATE JSON to every response.
+✅ SEQUENTIAL: Never ask for city before date is confirmed.
+✅ NO CITY GUESSING: Never auto-fill a city. Use only what customer says.
 
-═══════════════════════════════════════════════════════════════════════════
-RESPONSE FORMAT (MANDATORY):
-═══════════════════════════════════════════════════════════════════════════
-Always end your response with JSON on a new line:
-BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":false,"dateValue":"","hasCity":false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
-
-Example complete response:
-"Namaste ${customerData.customerName} ji! Aapki ${customerData.machineModel} ki service book karni hai?"
-BOOKING_STATE: {"intent":"greeting","hasDate":false,"dateValue":"","hasCity":false,"cityValue":"","status":"pending"}
+RESPONSE FORMAT:
+BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
 `;
 }
 
@@ -357,12 +333,12 @@ function parseAIResponse(aiText) {
     if (stateMatch) {
       const stateJson = JSON.parse(stateMatch[1]);
       extractedData = { ...extractedData, ...stateJson };
-      
+
       // Remove JSON from displayed text
       text = aiText.split('BOOKING_STATE:')[0].trim();
-      
+
       console.log(`✅ [PARSE] State: intent=${extractedData.intent}, status=${extractedData.status}`);
-      
+
       if (extractedData.hasDate) {
         console.log(`   ✅ Date extracted: ${extractedData.dateValue}`);
       }
@@ -409,31 +385,41 @@ function parseAIResponse(aiText) {
  */
 export function matchServiceCenter(cityText) {
   if (!cityText || cityText.trim().length === 0) return null;
-  
+
   const text = cityText.toLowerCase().trim();
-  
-  // Exact match first
+
+  // 1. Exact match
   for (const center of SERVICE_CENTERS) {
     if (center.city_name.toLowerCase() === text) {
       return center;
     }
   }
-  
-  // Partial match (first 3+ characters)
+
+  // 2. Common Phonetic/Typo overrides
+  const overrides = {
+    'jaypur': 'JAIPUR',
+    'jaipur': 'JAIPUR',
+    'alwar': 'ALWAR',
+    'ajmer': 'AJMER',
+    'kota': 'KOTA',
+    'sikar': 'SIKAR',
+    'udaipur': 'UDAIPUR',
+    'gauner': 'GONER ROAD',
+    'goner': 'GONER ROAD'
+  };
+
+  if (overrides[text]) {
+    return SERVICE_CENTERS.find(c => c.city_name === overrides[text]);
+  }
+
+  // 3. Prefix match (min 3 chars)
   for (const center of SERVICE_CENTERS) {
     const cityName = center.city_name.toLowerCase();
-    if (text.length >= 3 && cityName.startsWith(text.substring(0, 3))) {
+    if (text.length >= 3 && (cityName.startsWith(text.substring(0, 3)) || text.startsWith(cityName.substring(0, 3)))) {
       return center;
     }
   }
-  
-  // Contains match (last resort)
-  for (const center of SERVICE_CENTERS) {
-    if (center.city_name.toLowerCase().includes(text)) {
-      return center;
-    }
-  }
-  
+
   return null;
 }
 
@@ -443,30 +429,35 @@ export function matchServiceCenter(cityText) {
  */
 export function parseDate(dateText) {
   if (!dateText || dateText.trim().length === 0) return null;
-  
-  // Ensure we use IST (Indian Standard Time) to prevent timezone issues where UTC server is on previous day
+
+  // Use Date.now() as a base and force IST for accurate "Today"
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const today = new Date(utc + (3600000 * 5.5)); 
-  today.setHours(0, 0, 0, 0); // Start of day
+  const today = new Date(utc + (3600000 * 5.5)); // IST
+  today.setHours(0, 0, 0, 0);
 
   const text = dateText.toLowerCase().trim();
 
-  // Tomorrow (kal)
+  // 1. Tomorrow (kal)
   if (text.includes('kal')) {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     return tomorrow;
   }
 
-  // Day after tomorrow (parso)
+  // 2. Day after tomorrow (parso)
   if (text.includes('parso')) {
     const parso = new Date(today);
     parso.setDate(parso.getDate() + 2);
     return parso;
   }
 
-  // Day names (Hindi and English)
+  // 3. Today (aaj)
+  if (text.includes('aaj')) {
+    return today;
+  }
+
+  // 4. Day names
   const dayMap = {
     'somvar': 1, 'monday': 1,
     'mangalwar': 2, 'tuesday': 2,
@@ -486,24 +477,31 @@ export function parseDate(dateText) {
     }
   }
 
-  // Date format: "16 feb", "16 tarik"
+  // 5. Date format: "16 feb", "16 March", "28 Feb"
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const dateMatch = text.match(/(\d{1,2})\s*(tarik|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
+  
   if (dateMatch) {
     const day = parseInt(dateMatch[1]);
+    const monthText = dateMatch[2].substring(0, 3).toLowerCase();
+    const monthIndex = months.indexOf(monthText);
+    
     if (day >= 1 && day <= 31) {
-      const date = new Date(today);
-      date.setDate(day);
-      if (date < today) date.setMonth(date.getMonth() + 1);
-      return date;
+      const target = new Date(today);
+      target.setDate(day);
+      if (monthIndex !== -1) {
+        target.setMonth(monthIndex);
+      }
+      
+      // If the target date is in the past, move to next year
+      if (target < today) {
+        target.setFullYear(target.getFullYear() + 1);
+      }
+      return target;
     }
   }
 
-  // Today (aaj)
-  if (text.includes('aaj')) {
-    return today;
-  }
-
-  // Next week
+  // 6. Next week
   if (text.includes('next') || text.includes('agle') || text.includes('agla')) {
     const nextWeek = new Date(today);
     nextWeek.setDate(nextWeek.getDate() + 7);
@@ -521,7 +519,7 @@ export async function generateGoogleTTS(text) {
     console.warn('⚠️ Google TTS client not initialized');
     return null;
   }
-  
+
   let cleanText = text;
   const stateMatch = text.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
   if (stateMatch) {
@@ -537,7 +535,7 @@ export async function generateGoogleTTS(text) {
 
   try {
     const [response] = await ttsClient.synthesizeSpeech(request);
-    return response.audioContent; 
+    return response.audioContent;
   } catch (error) {
     console.error('❌ Google TTS Error:', error);
     return null;

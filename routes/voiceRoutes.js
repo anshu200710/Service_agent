@@ -153,11 +153,11 @@ router.post('/', async (req, res) => {
     const gather = twiml.gather({
       input: 'speech',
       language: 'hi-IN',
-      speechTimeout: 'auto', // Stop recording instantly after they finish speaking
-      timeout: 5,           // Reduced wait time for initial input
+      speechTimeout: 'auto', 
+      timeout: 5,           // Initial greeting timeout
       action: `/voice/process?callSid=${CallSid}`,
       method: 'POST',
-      maxSpeechTime: 15,    // Max allowed speech duration
+      maxSpeechTime: 15,    
       numDigits: 1
     });
 
@@ -339,11 +339,16 @@ router.post('/process', async (req, res) => {
       // ✅ STEP 5C: CONTINUE CONVERSATION
       console.log(`\n📤 Continuing conversation (Turn ${callDoc.totalTurns})`);
 
+      // ✅ Check if last message was silence to increase timeout
+      const lastUserMessage = callDoc.messages.filter(m => m.role === 'user').pop();
+      const isSilent = lastUserMessage && lastUserMessage.text.includes('[SILENCE');
+      const waitTimeout = isSilent ? 12 : 5; // Increase to 12s if they were silent, else 5s
+
       const gather = twiml.gather({
         input: 'speech',
         language: 'hi-IN',
-        speechTimeout: 'auto', // Instantly capture speech without a 5s silent delay
-        timeout: 5,           // Wait max 5 seconds before giving up initially
+        speechTimeout: 'auto',
+        timeout: waitTimeout,   // Dynamically set based on silence
         action: `/voice/process?callSid=${callSid}`,
         method: 'POST',
         maxSpeechTime: 15,
