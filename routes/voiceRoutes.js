@@ -68,6 +68,23 @@ async function sayWithClarity(twimlNode, text, isGather = false) {
   }
 }
 
+// ✅ PROCESSING LOCKS - Prevent concurrent processing of same call
+const processingLocks = new Map();
+
+async function acquireLock(callSid, timeoutMs = 15000) {
+  if (processingLocks.has(callSid)) {
+    console.warn(`⚠️ Call ${callSid} already processing, skipping duplicate`);
+    return false;
+  }
+  processingLocks.set(callSid, Date.now());
+  setTimeout(() => processingLocks.delete(callSid), timeoutMs);
+  return true;
+}
+
+function releaseLock(callSid) {
+  processingLocks.delete(callSid);
+}
+
 // ✅ HELPER: Send error TwiML response with clear voice
 function sendErrorTwiml(res, message) {
   const twiml = new twilio.twiml.VoiceResponse();
@@ -86,9 +103,8 @@ router.post('/', async (req, res) => {
     const { CallSid } = req.body;
 
     console.log('\n' + '='.repeat(70));
-    console.log(`📞 [VOICE] STEP 1: Initial call answered`);
+    console.log(`📞 [VOICE] STEP 1: Call Answered`);
     console.log(`   CallSid: ${CallSid}`);
-    console.log(`   TTS Engine: 🎙️ Google TTS + Polly fallback`);
     console.log('='.repeat(70));
 
     if (!CallSid) {
@@ -97,27 +113,20 @@ router.post('/', async (req, res) => {
     }
 
     // ✅ FETCH CALL FROM DATABASE
-    console.log('💾 Fetching call record from database...');
     const callDoc = await Call.findOne({ callSid: CallSid });
-
     if (!callDoc) {
       console.error(`❌ Call not found in database: ${CallSid}`);
-      return sendErrorTwiml(res, 'Call information not found. Please try again.');
+      return sendErrorTwiml(res, 'Call information not found.');
     }
-
-    console.log(`✅ Call found in database`);
-    console.log(`   Customer: ${callDoc.customerName}`);
-    console.log(`   Machine: ${callDoc.machineModel} (${callDoc.machineNumber})`);
-    console.log(`   Service Type: ${callDoc.serviceType}`);
 
     // ✅ UPDATE CALL STATUS
     callDoc.status = 'in_progress';
     callDoc.callStartedAt = new Date();
     callDoc.totalTurns = 0;
-    callDoc.messages = [];
+    // callDoc.messages = []; // Handled by new silence logic
     await callDoc.save();
 
-    console.log(`✅ Call status updated to 'in_progress'`);
+    console.log(`✅ Call status updated to 'in_progress' for: ${callDoc.customerName}`);
 
     // ✅ GET AI GREETING (first message, turn = 0)
     console.log(`\n🤖 Generating AI greeting...`);
@@ -164,7 +173,7 @@ router.post('/', async (req, res) => {
     // ✅ USE ELEVENLABS FOR GREETING
     await sayWithClarity(gather, aiResponse.text, true);
 
-    console.log(`📤 Sending TwiML gather response to Twilio`);
+    console.log(`📤 Sending greeting to: ${callDoc.customerName}`);
     console.log(`   Voice: 🎙️ Google TTS`);
     console.log(`   Waiting for customer speech...\n`);
 
@@ -183,43 +192,62 @@ router.post('/', async (req, res) => {
  * This is STEP 2-6 in the call flow
  */
 router.post('/process', async (req, res) => {
+  const { callSid } = req.query;
+  const userInput = (req.body.SpeechResult || '').trim();
+
+  if (!callSid) return sendErrorTwiml(res, 'CallSid missing');
+
+  // Prevent double processing
+  if (!(await acquireLock(callSid))) {
+    return res.status(200).send(); 
+  }
+
   try {
-    const { callSid } = req.query;
-    const userInput = req.body.SpeechResult || '';
-
-    console.log('\n' + '='.repeat(70));
-    console.log(`🗣️  [PROCESS] Processing user input`);
-    console.log(`   CallSid: ${callSid}`);
-    console.log(`   Input: "${userInput}"`);
-    console.log('='.repeat(70));
-
-    if (!callSid) {
-      console.error('❌ Missing callSid in query parameters');
-      return sendErrorTwiml(res, 'CallSid missing');
-    }
-
-    // ✅ FETCH CALL RECORD
     const callDoc = await Call.findOne({ callSid });
     if (!callDoc) {
-      console.error(`❌ Call not found: ${callSid}`);
-      return sendErrorTwiml(res, 'Call not found in database');
+      return sendErrorTwiml(res, 'Call not found');
     }
 
-    // ✅ SAVE USER INPUT (STEP 2)
-    if (userInput && userInput.trim()) {
+    console.log('\n' + '='.repeat(70));
+    console.log(`🗣️  [PROCESS] User Input: "${userInput || '[SILENCE]'}"`);
+    console.log('='.repeat(70));
+
+    // ✅ SAVE USER INPUT (STEP 2) & Handle silence with retries
+    if (!userInput) {
+      const silenceCount = callDoc.messages.filter(m => m.text === '[SILENCE - No response]').length;
+      
+      if (silenceCount >= 1) {
+        // Second silence - end call
+        console.log(`⚠️  Double silence - ending call`);
+        const finalMsg = "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!";
+        const twiml = new twilio.twiml.VoiceResponse();
+        await sayWithClarity(twiml, finalMsg, false);
+        twiml.hangup();
+        
+        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
+        callDoc.messages.push({ role: 'assistant', text: finalMsg, timestamp: new Date() });
+        callDoc.status = 'completed';
+        callDoc.outcome = 'declined';
+        callDoc.callEndedAt = new Date();
+        if (callDoc.callStartedAt) {
+          callDoc.callDurationSeconds = Math.round((callDoc.callEndedAt - callDoc.callStartedAt) / 1000);
+        }
+        await callDoc.save();
+        
+        return res.type('text/xml').send(twiml.toString());
+      } else {
+        // First silence - re-prompt
+        console.log(`⚠️  Empty user input - customer was silent (first instance)`);
+        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
+      }
+    } else {
+      // Save valid input
       callDoc.messages.push({
         role: 'user',
-        text: userInput.trim(),
+        text: userInput,
         timestamp: new Date()
       });
       console.log(`✅ User message saved (${userInput.length} chars)`);
-    } else {
-      console.log(`⚠️  Empty user input - customer was silent`);
-      callDoc.messages.push({
-        role: 'user',
-        text: '[SILENCE - No response]',
-        timestamp: new Date()
-      });
     }
 
     // Calculate current turn count
@@ -300,9 +328,9 @@ router.post('/process', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
 
     // ✅ STEP 5A/B/C: HANDLE DIFFERENT OUTCOMES
-    if (aiResponse.shouldEnd) {
+    if (aiResponse.shouldEnd || aiResponse.extractedData.status === 'confirmed' || aiResponse.extractedData.status === 'already_done' || aiResponse.extractedData.status === 'declined') {
       // Call should end - STEP 5 & 6 COMPLETION
-      console.log(`\n✅ [PROCESS] Call ending - Status: ${aiResponse.nextState}`);
+      console.log(`\n✅ [PROCESS] Call completed - Outcome: ${callDoc.outcome}`);
 
       // ✅ USE ELEVENLABS FOR FINAL MESSAGE
       await sayWithClarity(twiml, aiResponse.text, false);
@@ -318,40 +346,15 @@ router.post('/process', async (req, res) => {
         );
       }
 
-      await callDoc.save();
-
-      // ✅ LOG FINAL SUMMARY
-      console.log(`\n📊 ═══════════════════════════════════════════════════════════`);
-      console.log(`📊 CALL COMPLETED - FINAL SUMMARY`);
-      console.log(`📊 ═══════════════════════════════════════════════════════════`);
-      console.log(`   Customer: ${callDoc.customerName}`);
-      console.log(`   Phone: ${callDoc.customerPhone}`);
-      console.log(`   Machine: ${callDoc.machineModel} (${callDoc.machineNumber})`);
-      console.log(`   Service Type: ${callDoc.serviceType}`);
-      console.log(`   Booked Date: ${callDoc.booking.confirmedServiceDate || 'N/A'}`);
-      console.log(`   Service Center: ${callDoc.booking.assignedBranchCity || 'N/A'}`);
-      console.log(`   Outcome: ${callDoc.outcome}`);
-      console.log(`   Duration: ${callDoc.callDurationSeconds}s`);
-      console.log(`   Total Turns: ${callDoc.totalTurns}`);
-      console.log(`   Messages: ${callDoc.messages.length}`);
-      console.log(`   Completion Reason: ${aiResponse.nextState}`);
-      console.log(`   TTS Engine Used: 🎙️ Google TTS`);
-      console.log(`📊 ═══════════════════════════════════════════════════════════\n`);
-
     } else {
       // ✅ STEP 5C: CONTINUE CONVERSATION
-      console.log(`\n📤 Continuing conversation (Turn ${callDoc.totalTurns})`);
-
-      // ✅ Check if last message was silence to increase timeout
-      const lastUserMessage = callDoc.messages.filter(m => m.role === 'user').pop();
-      const isSilent = lastUserMessage && lastUserMessage.text.includes('[SILENCE');
-      const waitTimeout = isSilent ? 12 : 5; // Increase to 12s if they were silent, else 5s
+      console.log(`\n📤 Continuing conversation turn: ${callDoc.totalTurns}`);
 
       const gather = twiml.gather({
         input: 'speech',
         language: 'hi-IN',
         speechTimeout: 'auto',
-        timeout: waitTimeout,   // Dynamically set based on silence
+        timeout: 5,   // Fixed timeout for subsequent gathers
         action: `/voice/process?callSid=${callSid}`,
         method: 'POST',
         maxSpeechTime: 15,
@@ -375,6 +378,8 @@ router.post('/process', async (req, res) => {
     console.error(`\n❌ [PROCESS] Error processing input:`, error.message);
     console.error(`   Stack:`, error.stack);
     return sendErrorTwiml(res, 'Process error. Call failed.');
+  } finally {
+    releaseLock(callSid);
   }
 });
 
