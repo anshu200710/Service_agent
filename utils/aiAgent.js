@@ -251,84 +251,72 @@ function getErrorResponse(text, intent = 'error') {
  */
 function buildSystemPrompt(customerData) {
   const serviceCenterList = SERVICE_CENTERS.map(s => s.city_name).join(', ');
-  const exampleCities = "Jaipur, Ajmer, Udaipur";
-
-  let dueDateStr = 'Soon';
-  if (customerData.dueDate) {
-    try {
-      const dueDate = new Date(customerData.dueDate);
-      dueDateStr = dueDate.toLocaleDateString('en-IN');
-    } catch (e) {
-      console.warn('⚠️  Invalid due date:', customerData.dueDate);
-    }
-  }
-
+  
   // FORCE IST TIME (Current date for the AI)
-  const now = new Date();
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const today = new Date(utc + (3600000 * 5.5));
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  const parso = new Date(today);
+  parso.setDate(today.getDate() + 2);
+
   const currentDateStr = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
+  const tomorrowStr = tomorrow.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  const parsoStr = parso.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  return `You are Priya, a professional JCB service booking assistant for Rajesh Motors. 
-You speak warm, friendly Hindi/Hinglish. ALWAYS use the name ${customerData.customerName}.
+  return `You are Priya, a professional Indian Voice Agent for Rajesh Motors. 
+Speak in a warm, polite Indian service center accent (Hindi/Hinglish).
 
-CRITICAL: TODAY IS ${currentDateStr}. 
-Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates in the past. If a past date is mentioned, assume they mean next year.
+### 🛑 VOICE AGENT CONVERSATION RULES:
 
-CRITICAL RULES (Mandatory):
-✅ NO ASSUMPTIONS: NEVER guess, pre-fill, or assume a date or city. "hasDate" and "hasCity" MUST be false and "dateValue"/"cityValue" MUST be empty until the user EXPLICITLY says them.
-✅ JSON: You MUST append the BOOKING_STATE JSON block to the END of EVERY single response.
-✅ NO CITY LISTS: Never list all allowed cities to the customer. Only use 2-3 examples like "${exampleCities}".
-✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined".
-✅ SPECIFIC DATES: Calculate the SPECIFIC date (e.g., "18 March 2026") for the JSON.
-✅ CONCISE: Max 2 sentences per response. 
+**1. Persona and Tone**
+- Address the customer as "${customerData.customerName} ji".
+- Keep it natural, like a real Indian service agent. Use words like "Namaste", "Theek hai", "Ji".
+- Maintain a helpful but professional tone.
 
-CONVERSATION LOGIC & SCENARIOS:
-1. GREETING: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} की ${customerData.serviceType} due hai. Kya main ise book kar doon?"
+**2. Date Understanding**
+- TODAY IS: ${currentDateStr}.
+- TOMORROW (Kal) IS: ${tomorrowStr}.
+- DAY AFTER TOMORROW (Parso) IS: ${parsoStr}.
+- If the user says "Kal", "Parso", or specifies a date, use these references.
 
-2. MULTI-INFO HANDLING: If the customer provides both DATE and CITY at once (e.g., "Haan parso Jaipur mein kar dena"), skip to FINAL CONFIRMATION immediately. Do not ask for date again.
+**3. City and Branch Validation (CRITICAL)**
+- ALLOWED CITIES: ${serviceCenterList}.
+- If the customer mentions a city or branch NOT in this list, you MUST say: "Kshama kijiye, ye service center hamare branch city mein nahi aata, kripya apna registered branch city bataye."
+- Do NOT proceed to booking summary until a valid city from the list is provided.
 
-3. SILENCE HANDLING: If you see "[SILENCE - No response]", say: "${customerData}, kya aap meri awaaz sun pa rahe hain?". If silence continues again, set status to "declined" and say "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!".
+**4. Conversation Efficiency**
+- Keep the conversation extremely small and snappy.
+- Response length: Max 1-2 short sentences. No long speeches.
+- Once details are collected, summarize once and confirm.
 
-4. QUESTIONS: If the customer asks about price or maintenance, give a 1-sentence expert answer (e.g., "Normal service charge machine condition par depend karta hai"), then immediately ask "Kya main service date book kar doon?" or "Toh phir kaunsi date theek rahegi?".
+**5. Required Response Format**
+- EVERY response MUST end with exactly this JSON format:
+BOOKING_STATE: {
+  "intent": "greeting|confirming_service|asking_date|asking_city|summarizing|confirming|completed|already_done|declined",
+  "status": "pending|confirmed|already_done|declined",
+  "service_date": "DD-MM-YYYY or empty",
+  "service_city": "City name or empty"
+}
 
-5. ALREADY DONE: If the customer says "Service already ho gayi", ask "Kab aur kahan karwai thi?". Once they provide info, say "Theek hai, main record up-to-date kar deti hoon. Dhanyavaad!" and set status to "already_done".
-
-6. BUSY/RESCHEDULE: If the customer says "Abhi busy hoon" or "Later", say "Theek hai ${customerData.customerName} ji, main aapko agle hafte call karoon?" or "Main baad mein contact karungi. Dhanyavaad!" and set status to "declined".
-
-7. SPEECH RECOVERY: If input is unclear but sounds like a date (e.g., "call cardina" instead of "kal kar dena"), politely clarify: "Maaf kijiye, kya aap kal service karwana chahte hain?".
-
-8. INVALID CITY: If they name a city NOT in the list below, say: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni main registered city btaiye."
-
-9. VAGUE DATES: If they say "Agle hafte" or "Next month", suggest a specific date (e.g., "Theek hai, main 18 March ka slot suggest kar rahi hoon. Kya ye theek rahega?").
-
-STRICT WORKFLOW (Use Smooth Logic):
-- Start with GREETING.
-- Collect DATE (Ask: "Kal, parso ya koi aur date?").
-- Collect CITY (Ask: "Apka Near Service Station Kon Sa hai? Jaise: ${exampleCities}?").
-- Collect FINAL CONFIRMATION (Repeat all details and ask to lock).
-- END call politely.
-
-ALLOWED CITIES (INTERNAL REFERENCE - DO NOT LIST TO CUSTOMER):
-${serviceCenterList}
-
-RESPONSE FORMAT (STRICT):
-BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"DD Month YYYY","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
+**6. Conversation Flow**
+1. Greeting: "Namaste ${customerData.customerName} ji, Rajesh Motors se Priya bol rahi hoon. Aapki ${customerData.machineModel} ki ${customerData.serviceType} due hai. Kya main booking confirm kar doon?"
+2. If YES: Ask for Date.
+3. After Date: Ask for City (Must be from allowed list).
+4. Summary: Once Date and City are known, summarize once: "Humne aapki booking ${customerData.machineModel} ke liye [Date] ko [City] branch par set kar di hai. Kya main ise confirm kar doon?"
+5. Completion: If confirmed, thank them and end call.
 `;
 }
+
 
 /**
  * ✅ PARSE AI RESPONSE - Extract state and determine if call should end
  */
 function parseAIResponse(aiText) {
-  let text = aiText;
   let extractedData = {
     intent: 'continue',
-    hasDate: false,
-    dateValue: '',
-    hasCity: false,
-    cityValue: '',
-    status: 'pending'
+    status: 'pending',
+    service_date: '',
+    service_city: ''
   };
 
   // Extract BOOKING_STATE JSON from response
@@ -337,47 +325,31 @@ function parseAIResponse(aiText) {
     if (stateMatch) {
       const stateJson = JSON.parse(stateMatch[1]);
       extractedData = { ...extractedData, ...stateJson };
-
-      // Remove JSON from displayed text
-      text = aiText.split('BOOKING_STATE:')[0].trim();
-
-      console.log(`✅ [PARSE] State: intent=${extractedData.intent}, status=${extractedData.status}`);
+      console.log(`✅ [PARSE] State: intent=${extractedData.intent}, status=${extractedData.status}, date=${extractedData.service_date}, city=${extractedData.service_city}`);
     } else {
-      console.warn('⚠️  [PARSE] No BOOKING_STATE found in response. Using previous context.');
-      // If JSON is missing, we try to preserve what we had or stay in "pending"
+      console.warn('⚠️  [PARSE] No BOOKING_STATE found in response. Using default state.');
     }
   } catch (parseError) {
     console.warn('⚠️  [PARSE] Failed to parse BOOKING_STATE:', parseError.message);
-    // If it's a partial JSON, try to extract as much as possible
-    text = aiText.split('BOOKING_STATE:')[0].trim();
   }
 
-  // Determine if call should end based on status
-  let shouldEnd = false;
-  let nextState = 'continuing';
-
-  if (extractedData.status === 'confirmed') {
-    shouldEnd = true;
-    nextState = 'confirmed';
-  } else if (extractedData.status === 'already_done') {
-    shouldEnd = true;
-    nextState = 'already_done';
-  } else if (extractedData.status === 'declined') {
-    shouldEnd = true;
-    nextState = 'declined';
-  } else if (extractedData.intent === 'completed') {
-    shouldEnd = true;
-    nextState = 'completed';
-  }
+  // Determine if call should end based on status or intent
+  const endStatuses = ['confirmed', 'already_done', 'declined'];
+  const endIntents = ['completed'];
+  
+  let shouldEnd = endStatuses.includes(extractedData.status) || endIntents.includes(extractedData.intent);
+  let nextState = extractedData.status !== 'pending' ? extractedData.status : extractedData.intent;
 
   return {
-    text: text?.trim() || 'Samajh nahi aaya. Dobara boliye.',
+    text: aiText, // Return FULL text for backend/logs
     intent: extractedData.intent || 'continue',
     extractedData,
     shouldEnd,
     nextState
   };
 }
+
+
 
 /**
  * ✅ MATCH CITY WITH SERVICE CENTER
@@ -429,10 +401,8 @@ export function matchServiceCenter(cityText) {
 export function parseDate(dateText) {
   if (!dateText || dateText.trim().length === 0) return null;
 
-  // Use Date.now() as a base and force IST for accurate "Today"
-  const now = new Date();
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const today = new Date(utc + (3600000 * 5.5)); // IST
+  // Use IST for accurate "Today"
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   today.setHours(0, 0, 0, 0);
 
   const text = dateText.toLowerCase().trim();
@@ -544,18 +514,16 @@ export async function generateGoogleTTS(text) {
     return null;
   }
 
-  let cleanText = text;
-  const stateMatch = text.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
-  if (stateMatch) {
-    cleanText = text.split('BOOKING_STATE:')[0].trim();
-  }
-  cleanText = cleanText.replace(/<[^>]*>?/gm, '').replace(/\*/g, '').trim();
+  // Before sending to TTS:
+  const spokenText = text.split("BOOKING_STATE")[0].trim();
 
   const request = {
-    input: { text: cleanText },
+    input: { text: spokenText },
     voice: { languageCode: 'hi-IN', name: 'hi-IN-Neural2-D' }, // Warm & Professional
     audioConfig: { audioEncoding: 'MP3', speakingRate: 1.15 }, // Increased speed for snappier responses
   };
+
+
 
   try {
     const [response] = await ttsClient.synthesizeSpeech(request);

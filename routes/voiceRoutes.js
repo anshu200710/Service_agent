@@ -37,18 +37,15 @@ const VOICE_CONFIG = {
 
 // ✅ HELPER: Speak with improved clarity - Using Google TTS
 async function sayWithClarity(twimlNode, text, isGather = false) {
-  // Format text, stripping out JSON parts or weird characters
-  let cleanText = text;
-  const stateMatch = cleanText.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
-  if (stateMatch) {
-    cleanText = cleanText.split('BOOKING_STATE:')[0].trim();
-  }
-  cleanText = cleanText.replace(/<[^>]*>?/gm, '').replace(/\*/g, '').trim();
+  // Before sending to TTS:
+  const spokenText = text.split("BOOKING_STATE")[0].trim();
+
+
 
   try {
     // Generate text URL for Twilio to load the MP3 stream on the fly
     console.log(`🎙️ Using Google TTS...`);
-    const encodedText = encodeURIComponent(cleanText);
+    const encodedText = encodeURIComponent(spokenText);
     
     // Check if within Twilio URL length limit safely, Twilio handles up to 2048 chars easily
     const audioUrl = `/voice/tts?text=${encodedText}`;
@@ -62,10 +59,11 @@ async function sayWithClarity(twimlNode, text, isGather = false) {
   // ✅ FALLBACK: Use Polly if Google TTS fails unexpectedly
   console.log(`📢 Falling back to Polly.Aditi`);
   if (isGather) {
-    twimlNode.say(cleanText, VOICE_CONFIG);
+    twimlNode.say(spokenText, VOICE_CONFIG);
   } else {
-    twimlNode.say(cleanText, VOICE_CONFIG);
+    twimlNode.say(spokenText, VOICE_CONFIG);
   }
+
 }
 
 // ✅ PROCESSING LOCKS - Prevent concurrent processing of same call
@@ -271,20 +269,20 @@ router.post('/process', async (req, res) => {
     console.log(`\n📋 Checking for booking data extraction...`);
 
     // Extract and save date if present
-    if (aiResponse.extractedData.hasDate && aiResponse.extractedData.dateValue) {
-      const parsedDate = parseDate(aiResponse.extractedData.dateValue);
+    if (aiResponse.extractedData.service_date) {
+      const parsedDate = parseDate(aiResponse.extractedData.service_date);
       if (parsedDate) {
         // Format to "DD-MM-YYYY" for clear display
         const formattedDate = parsedDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
         callDoc.booking.confirmedServiceDate = formattedDate;
         callDoc.booking.confirmedServiceDateISO = parsedDate;
-        console.log(`   ✅ Service date extracted: ${formattedDate} (from raw: ${aiResponse.extractedData.dateValue})`);
+        console.log(`   ✅ Service date extracted: ${formattedDate} (from raw: ${aiResponse.extractedData.service_date})`);
       }
     }
 
     // Extract and save city if present
-    if (aiResponse.extractedData.hasCity && aiResponse.extractedData.cityValue) {
-      const matchedCity = matchServiceCenter(aiResponse.extractedData.cityValue);
+    if (aiResponse.extractedData.service_city) {
+      const matchedCity = matchServiceCenter(aiResponse.extractedData.service_city);
       if (matchedCity) {
         callDoc.booking.assignedBranchCity = matchedCity.city_name;
         callDoc.booking.assignedBranchName = matchedCity.branch_name;
@@ -292,6 +290,7 @@ router.post('/process', async (req, res) => {
         console.log(`   ✅ Service center matched: ${matchedCity.city_name} (${matchedCity.branch_name})`);
       }
     }
+
 
     // Update outcome if status changed and is a valid enum value
     const validOutcomes = ['confirmed', 'already_done', 'declined'];
