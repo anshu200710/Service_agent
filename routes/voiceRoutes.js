@@ -202,34 +202,11 @@ router.post('/process', async (req, res) => {
     console.log(`🗣️  [PROCESS] User Input: "${userInput || '[SILENCE]'}"`);
     console.log('='.repeat(70));
 
-    // ✅ SAVE USER INPUT (STEP 2) & Handle silence with retries
+    // ✅ SAVE USER INPUT (STEP 2) & Handle silence with continuous retry
     if (!userInput) {
-      const silenceCount = callDoc.messages.filter(m => m.text === '[SILENCE - No response]').length;
-      
-      if (silenceCount >= 1) {
-        // Second silence - end call
-        console.log(`⚠️  Double silence - ending call`);
-        const finalMsg = "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!";
-        const twiml = new twilio.twiml.VoiceResponse();
-        await sayWithClarity(twiml, finalMsg, false);
-        twiml.hangup();
-        
-        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
-        callDoc.messages.push({ role: 'assistant', text: finalMsg, timestamp: new Date() });
-        callDoc.status = 'completed';
-        callDoc.outcome = 'declined';
-        callDoc.callEndedAt = new Date();
-        if (callDoc.callStartedAt) {
-          callDoc.callDurationSeconds = Math.round((callDoc.callEndedAt - callDoc.callStartedAt) / 1000);
-        }
-        await callDoc.save();
-        
-        return res.type('text/xml').send(twiml.toString());
-      } else {
-        // First silence - re-prompt
-        console.log(`⚠️  Empty user input - customer was silent (first instance)`);
-        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
-      }
+      console.log(`⚠️  Empty user input - customer was silent, will re-prompt`);
+      callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
+      // Keep asking - never end call on silence
     } else {
       // Save valid input
       callDoc.messages.push({

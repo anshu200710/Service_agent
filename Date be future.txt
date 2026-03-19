@@ -1,0 +1,1064 @@
+import express from 'express';
+import twilio from 'twilio';
+import Call from '../models/Call.js';
+import { getAIResponse, matchServiceCenter, parseDate, generateGoogleTTS } from '../utils/aiAgent.js';
+
+const router = express.Router();
+
+// ✅ NEW ROUTE: Serve generated Google TTS on the fly
+router.get('/tts', async (req, res) => {
+  try {
+    const text = req.query.text;
+    if (!text) return res.status(400).send('Text is required');
+
+    const audioContent = await generateGoogleTTS(text);
+    if (!audioContent) {
+      return res.status(500).send('Error generating TTS');
+    }
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioContent.length
+    });
+    res.send(audioContent);
+  } catch (err) {
+    console.error('Error in /tts route:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+// ✅ VOICE SETTINGS - Clear, Warm, Female, Understandable
+const VOICE_CONFIG = {
+  language: 'hi-IN',
+  voice: 'Polly.Aditi',
+  engine: 'neural',
+  speechRate: '0.85'  // Fallback only
+};
+
+// ✅ HELPER: Speak with improved clarity - Using Google TTS
+async function sayWithClarity(twimlNode, text, isGather = false) {
+  // Format text, stripping out JSON parts or weird characters
+  let cleanText = text;
+  const stateMatch = cleanText.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
+  if (stateMatch) {
+    cleanText = cleanText.split('BOOKING_STATE:')[0].trim();
+  }
+  cleanText = cleanText.replace(/<[^>]*>?/gm, '').replace(/\*/g, '').trim();
+
+  try {
+    // Generate text URL for Twilio to load the MP3 stream on the fly
+    console.log(`🎙️ Using Google TTS...`);
+    const encodedText = encodeURIComponent(cleanText);
+    
+    // Check if within Twilio URL length limit safely, Twilio handles up to 2048 chars easily
+    const audioUrl = `/voice/tts?text=${encodedText}`;
+    
+    twimlNode.play(audioUrl); 
+    return;
+  } catch (error) {
+    console.warn(`⚠️  Google TTS generation failed, falling back to Polly:`, error.message);
+  }
+
+  // ✅ FALLBACK: Use Polly if Google TTS fails unexpectedly
+  console.log(`📢 Falling back to Polly.Aditi`);
+  if (isGather) {
+    twimlNode.say(cleanText, VOICE_CONFIG);
+  } else {
+    twimlNode.say(cleanText, VOICE_CONFIG);
+  }
+}
+
+// ✅ PROCESSING LOCKS - Prevent concurrent processing of same call
+const processingLocks = new Map();
+
+async function acquireLock(callSid, timeoutMs = 15000) {
+  if (processingLocks.has(callSid)) {
+    console.warn(`⚠️ Call ${callSid} already processing, skipping duplicate`);
+    return false;
+  }
+  processingLocks.set(callSid, Date.now());
+  setTimeout(() => processingLocks.delete(callSid), timeoutMs);
+  return true;
+}
+
+function releaseLock(callSid) {
+  processingLocks.delete(callSid);
+}
+
+// ✅ HELPER: Send error TwiML response with clear voice
+function sendErrorTwiml(res, message) {
+  const twiml = new twilio.twiml.VoiceResponse();
+  twiml.say(message, VOICE_CONFIG);
+  twiml.hangup();
+  return res.type('text/xml').send(twiml.toString());
+}
+
+/**
+ * POST /voice
+ * Initial webhook when customer answers the call
+ * This is STEP 1 in the call flow
+ */
+router.post('/', async (req, res) => {
+  const { CallSid } = req.body;
+
+  if (!CallSid) {
+    console.error('❌ Missing CallSid in request');
+    return sendErrorTwiml(res, 'System error. Call failed.');
+  }
+
+  // Prevent double initiation
+  if (!(await acquireLock(CallSid))) {
+    return res.status(200).send();
+  }
+
+  try {
+    console.log('\n' + '='.repeat(70));
+    console.log(`📞 [VOICE] STEP 1: Call Answered`);
+    console.log(`   CallSid: ${CallSid}`);
+    console.log('='.repeat(70));
+
+    // ✅ FETCH CALL FROM DATABASE
+    const callDoc = await Call.findOne({ callSid: CallSid });
+    if (!callDoc) {
+      console.error(`❌ Call not found in database: ${CallSid}`);
+      return sendErrorTwiml(res, 'Call information not found.');
+    }
+
+    // ✅ UPDATE CALL STATUS
+    callDoc.status = 'in_progress';
+    callDoc.callStartedAt = new Date();
+    callDoc.totalTurns = 0;
+    await callDoc.save();
+
+    console.log(`✅ Call status updated to 'in_progress' for: ${callDoc.customerName}`);
+
+    // ✅ GET AI GREETING
+    const aiResponse = await getAIResponse([], {
+      customerName: callDoc.customerName,
+      customerPhone: callDoc.customerPhone,
+      machineModel: callDoc.machineModel,
+      machineNumber: callDoc.machineNumber,
+      machineType: callDoc.machineType,
+      serviceType: callDoc.serviceType,
+      dueDate: callDoc.dueDate
+    }, 0);
+
+    // ✅ SAVE AI GREETING TO DATABASE
+    callDoc.messages.push({
+      role: 'assistant',
+      text: aiResponse.text,
+      timestamp: new Date()
+    });
+    await callDoc.save();
+
+    // ✅ BUILD TWIML RESPONSE WITH GATHER
+    const twiml = new twilio.twiml.VoiceResponse();
+    const gather = twiml.gather({
+      input: 'speech',
+      language: 'hi-IN',
+      speechTimeout: 'auto', 
+      timeout: 5,
+      action: `/voice/process?callSid=${CallSid}`,
+      method: 'POST',
+      maxSpeechTime: 15
+    });
+
+    await sayWithClarity(gather, aiResponse.text, true);
+
+    console.log(`📤 Sending greeting to: ${callDoc.customerName}`);
+    res.type('text/xml').send(twiml.toString());
+
+  } catch (error) {
+    console.error(`❌ [VOICE] Error in initial webhook:`, error.message);
+    return sendErrorTwiml(res, 'System error. Call failed.');
+  } finally {
+    releaseLock(CallSid);
+  }
+});
+
+/**
+ * POST /voice/process
+ * Handle user speech input and continue conversation
+ * This is STEP 2-6 in the call flow
+ */
+router.post('/process', async (req, res) => {
+  const { callSid } = req.query;
+  const userInput = (req.body.SpeechResult || '').trim();
+
+  if (!callSid) return sendErrorTwiml(res, 'CallSid missing');
+
+  // Prevent double processing
+  if (!(await acquireLock(callSid))) {
+    return res.status(200).send(); 
+  }
+
+  try {
+    const callDoc = await Call.findOne({ callSid });
+    if (!callDoc) {
+      return sendErrorTwiml(res, 'Call not found');
+    }
+
+    console.log('\n' + '='.repeat(70));
+    console.log(`🗣️  [PROCESS] User Input: "${userInput || '[SILENCE]'}"`);
+    console.log('='.repeat(70));
+
+    // ✅ SAVE USER INPUT (STEP 2) & Handle silence with retries
+    if (!userInput) {
+      const silenceCount = callDoc.messages.filter(m => m.text === '[SILENCE - No response]').length;
+      
+      if (silenceCount >= 1) {
+        // Second silence - end call
+        console.log(`⚠️  Double silence - ending call`);
+        const finalMsg = "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!";
+        const twiml = new twilio.twiml.VoiceResponse();
+        await sayWithClarity(twiml, finalMsg, false);
+        twiml.hangup();
+        
+        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
+        callDoc.messages.push({ role: 'assistant', text: finalMsg, timestamp: new Date() });
+        callDoc.status = 'completed';
+        callDoc.outcome = 'declined';
+        callDoc.callEndedAt = new Date();
+        if (callDoc.callStartedAt) {
+          callDoc.callDurationSeconds = Math.round((callDoc.callEndedAt - callDoc.callStartedAt) / 1000);
+        }
+        await callDoc.save();
+        
+        return res.type('text/xml').send(twiml.toString());
+      } else {
+        // First silence - re-prompt
+        console.log(`⚠️  Empty user input - customer was silent (first instance)`);
+        callDoc.messages.push({ role: 'user', text: '[SILENCE - No response]', timestamp: new Date() });
+      }
+    } else {
+      // Save valid input
+      callDoc.messages.push({
+        role: 'user',
+        text: userInput,
+        timestamp: new Date()
+      });
+      console.log(`✅ User message saved (${userInput.length} chars)`);
+    }
+
+    // Calculate current turn count
+    const turnCount = Math.floor(callDoc.messages.length / 2);
+    console.log(`📊 Turn count: ${turnCount}/12`);
+
+    // ✅ GET AI RESPONSE (STEP 3)
+    console.log(`\n🤖 Getting AI response...`);
+    const aiResponse = await getAIResponse(callDoc.messages, {
+      customerName: callDoc.customerName,
+      customerPhone: callDoc.customerPhone,
+      machineModel: callDoc.machineModel,
+      machineNumber: callDoc.machineNumber,
+      machineType: callDoc.machineType,
+      serviceType: callDoc.serviceType,
+      dueDate: callDoc.dueDate
+    }, turnCount);
+
+    if (!aiResponse || !aiResponse.text) {
+      console.error('❌ AI response is empty');
+      return sendErrorTwiml(res, 'AI service error');
+    }
+
+    console.log(`✅ AI response received`);
+    console.log(`   Text: "${aiResponse.text.substring(0, 70)}..."`);
+    console.log(`   Intent: ${aiResponse.intent}`);
+    console.log(`   Status: ${aiResponse.extractedData.status}`);
+    console.log(`   Should end: ${aiResponse.shouldEnd}`);
+
+    // ✅ STEP 4: CHECK FOR BOOKING INTENT
+    console.log(`\n📋 Checking for booking data extraction...`);
+
+    // Extract and save date if present
+    if (aiResponse.extractedData.hasDate && aiResponse.extractedData.dateValue) {
+      const parsedDate = parseDate(aiResponse.extractedData.dateValue);
+      if (parsedDate) {
+        // Format to "DD-MM-YYYY" for clear display
+        const formattedDate = parsedDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+        callDoc.booking.confirmedServiceDate = formattedDate;
+        callDoc.booking.confirmedServiceDateISO = parsedDate;
+        console.log(`   ✅ Service date extracted: ${formattedDate} (from raw: ${aiResponse.extractedData.dateValue})`);
+      }
+    }
+
+    // Extract and save city if present
+    if (aiResponse.extractedData.hasCity && aiResponse.extractedData.cityValue) {
+      const matchedCity = matchServiceCenter(aiResponse.extractedData.cityValue);
+      if (matchedCity) {
+        callDoc.booking.assignedBranchCity = matchedCity.city_name;
+        callDoc.booking.assignedBranchName = matchedCity.branch_name;
+        callDoc.booking.assignedBranchCode = matchedCity.branch_code;
+        console.log(`   ✅ Service center matched: ${matchedCity.city_name} (${matchedCity.branch_name})`);
+      }
+    }
+
+    // Update outcome if status changed and is a valid enum value
+    const validOutcomes = ['confirmed', 'already_done', 'declined'];
+    if (aiResponse.extractedData.status && validOutcomes.includes(aiResponse.extractedData.status)) {
+      callDoc.outcome = aiResponse.extractedData.status;
+      console.log(`   ✅ Outcome set to: ${aiResponse.extractedData.status}`);
+    }
+
+    // ✅ SAVE AI RESPONSE TO MESSAGES
+    callDoc.messages.push({
+      role: 'assistant',
+      text: aiResponse.text,
+      timestamp: new Date()
+    });
+
+    // ✅ UPDATE CONVERSATION TRANSCRIPT
+    callDoc.conversationTranscript = callDoc.messages
+      .map(m => `${m.role === 'user' ? 'Customer' : 'Assistant'}: ${m.text}`)
+      .join('\n');
+
+    callDoc.totalTurns = Math.floor(callDoc.messages.length / 2);
+
+    // ✅ BUILD TWIML RESPONSE
+    const twiml = new twilio.twiml.VoiceResponse();
+
+    // ✅ STEP 5A/B/C: HANDLE DIFFERENT OUTCOMES
+    if (aiResponse.shouldEnd || aiResponse.extractedData.status === 'confirmed' || aiResponse.extractedData.status === 'already_done' || aiResponse.extractedData.status === 'declined') {
+      // Call should end - STEP 5 & 6 COMPLETION
+      console.log(`\n✅ [PROCESS] Call completed - Outcome: ${callDoc.outcome}`);
+
+      // ✅ USE ELEVENLABS FOR FINAL MESSAGE
+      await sayWithClarity(twiml, aiResponse.text, false);
+      twiml.hangup();
+
+      // ✅ MARK CALL AS COMPLETED
+      callDoc.status = 'completed';
+      callDoc.callEndedAt = new Date();
+
+      if (callDoc.callStartedAt) {
+        callDoc.callDurationSeconds = Math.round(
+          (callDoc.callEndedAt - callDoc.callStartedAt) / 1000
+        );
+      }
+
+    } else {
+      // ✅ STEP 5C: CONTINUE CONVERSATION
+      console.log(`\n📤 Continuing conversation turn: ${callDoc.totalTurns}`);
+
+      const gather = twiml.gather({
+        input: 'speech',
+        language: 'hi-IN',
+        speechTimeout: 'auto',
+        timeout: 5,   // Fixed timeout for subsequent gathers
+        action: `/voice/process?callSid=${callSid}`,
+        method: 'POST',
+        maxSpeechTime: 15,
+        numDigits: 1
+      });
+
+      // ✅ USE GOOGLE TTS FOR RESPONSE
+      await sayWithClarity(gather, aiResponse.text, true);
+
+      console.log(`   Voice: 🎙️ Google TTS`);
+      console.log(`   Waiting for next customer response...\n`);
+    }
+
+    // Save all changes
+    await callDoc.save();
+    console.log(`✅ Call record updated in database`);
+
+    res.type('text/xml').send(twiml.toString());
+
+  } catch (error) {
+    console.error(`\n❌ [PROCESS] Error processing input:`, error.message);
+    console.error(`   Stack:`, error.stack);
+    return sendErrorTwiml(res, 'Process error. Call failed.');
+  } finally {
+    releaseLock(callSid);
+  }
+});
+
+/**
+ * GET /voice/calls/:callSid
+ * Check detailed status of a specific call
+ */
+router.get('/calls/:callSid', async (req, res) => {
+  try {
+    const { callSid } = req.params;
+
+    console.log(`\n📊 [STATUS] Fetching call details: ${callSid}`);
+
+    const callDoc = await Call.findOne({ callSid });
+
+    if (!callDoc) {
+      console.error(`❌ Call not found: ${callSid}`);
+      return res.status(404).json({
+        error: 'Call not found',
+        callSid
+      });
+    }
+
+    console.log(`✅ Call found`);
+
+    return res.json({
+      success: true,
+      call: {
+        callSid: callDoc.callSid,
+        status: callDoc.status,
+        outcome: callDoc.outcome,
+        customer: {
+          name: callDoc.customerName,
+          phone: callDoc.customerPhone
+        },
+        machine: {
+          model: callDoc.machineModel,
+          number: callDoc.machineNumber,
+          type: callDoc.machineType
+        },
+        service: {
+          type: callDoc.serviceType,
+          dueDate: callDoc.dueDate
+        },
+        booking: {
+          confirmedDate: callDoc.booking.confirmedServiceDate || null,
+          confirmedDateISO: callDoc.booking.confirmedServiceDateISO || null,
+          assignedCity: callDoc.booking.assignedBranchCity || null,
+          assignedBranch: callDoc.booking.assignedBranchName || null,
+          branchCode: callDoc.booking.assignedBranchCode || null
+        },
+        metrics: {
+          startedAt: callDoc.callStartedAt,
+          endedAt: callDoc.callEndedAt,
+          durationSeconds: callDoc.callDurationSeconds || 0,
+          totalTurns: callDoc.totalTurns || 0,
+          totalMessages: callDoc.messages.length
+        },
+        transcript: callDoc.conversationTranscript,
+        createdAt: callDoc.createdAt,
+        updatedAt: callDoc.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching call details:', error.message);
+    return res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+export default router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#ai agent code
+
+import Groq from 'groq-sdk';
+import textToSpeech from '@google-cloud/text-to-speech';
+import path from 'path';
+
+// ✅ GOOGLE TTS INITIALIZATION
+let ttsClient = null;
+try {
+  if (process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_CLIENT_EMAIL) {
+    ttsClient = new textToSpeech.TextToSpeechClient({
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Handle escaped newlines
+      },
+      projectId: process.env.GOOGLE_PROJECT_ID,
+    });
+    console.log('✅ [AI] Google TTS client initialized via environment variables');
+  } else {
+    ttsClient = new textToSpeech.TextToSpeechClient({
+      keyFilename: path.join(process.cwd(), 'utils', 'data.json')
+    });
+    console.log('✅ [AI] Google TTS client initialized via data.json file');
+  }
+} catch (error) {
+  console.error('❌ [AI] Failed to initialize Google TTS client', error);
+}// ✅ SAFE GROQ INITIALIZATION
+let groq = null;
+let groqInitialized = false;
+
+try {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+
+  if (!apiKey) {
+    console.error('❌ [AI] GROQ_API_KEY is not set in environment variables');
+    console.error('   Please add GROQ_API_KEY to your .env file');
+  } else {
+    // Initialize Groq client with API key only
+    groq = new Groq({ apiKey });
+    groqInitialized = true;
+    console.log('✅ [AI] Groq client initialized successfully');
+    console.log(`   API Key: ${apiKey.substring(0, 10)}...`);
+  }
+} catch (initError) {
+  console.error('❌ [AI] Failed to initialize Groq client:', initError.message);
+  console.error('   Error details:', initError);
+  groqInitialized = false;
+}
+
+// ✅ SERVICE CENTERS DATABASE
+const SERVICE_CENTERS = [
+  { id: 1, city_name: "AJMER", branch_name: "AJMER", branch_code: "1" },
+  { id: 2, city_name: "ALWAR", branch_name: "ALWAR", branch_code: "2" },
+  { id: 3, city_name: "BANSWARA", branch_name: "UDAIPUR", branch_code: "7" },
+  { id: 4, city_name: "BHARATPUR", branch_name: "ALWAR", branch_code: "2" },
+  { id: 5, city_name: "BHILWARA", branch_name: "BHILWARA", branch_code: "3" },
+  { id: 6, city_name: "BHIWADI", branch_name: "ALWAR", branch_code: "2" },
+  { id: 7, city_name: "DAUSA", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 8, city_name: "DHOLPUR", branch_name: "ALWAR", branch_code: "2" },
+  { id: 9, city_name: "DUNGARPUR", branch_name: "UDAIPUR", branch_code: "7" },
+  { id: 10, city_name: "GONER ROAD", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 11, city_name: "JAIPUR", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 12, city_name: "JHALAWAR", branch_name: "KOTA", branch_code: "5" },
+  { id: 13, city_name: "JHUNJHUNU", branch_name: "SIKAR", branch_code: "6" },
+  { id: 14, city_name: "KARAULI", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 15, city_name: "KEKRI", branch_name: "AJMER", branch_code: "1" },
+  { id: 16, city_name: "KOTA", branch_name: "KOTA", branch_code: "5" },
+  { id: 17, city_name: "KOTPUTLI", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 18, city_name: "NEEM KA THANA", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 19, city_name: "NIMBAHERA", branch_name: "BHILWARA", branch_code: "3" },
+  { id: 20, city_name: "PRATAPGARH", branch_name: "BHILWARA", branch_code: "3" },
+  { id: 21, city_name: "RAJSAMAND", branch_name: "UDAIPUR", branch_code: "7" },
+  { id: 22, city_name: "RAMGANJMANDI", branch_name: "KOTA", branch_code: "5" },
+  { id: 23, city_name: "SIKAR", branch_name: "SIKAR", branch_code: "6" },
+  { id: 25, city_name: "SUJANGARH", branch_name: "SIKAR", branch_code: "6" },
+  { id: 26, city_name: "TONK", branch_name: "JAIPUR", branch_code: "4" },
+  { id: 27, city_name: "UDAIPUR", branch_name: "UDAIPUR", branch_code: "7" },
+  { id: 28, city_name: "VKIA", branch_name: "JAIPUR", branch_code: "4" }
+];
+
+/**
+ * ✅ GET AI RESPONSE - Complete conversation flow handler
+ * @param {array} messages - Conversation history
+ * @param {object} customerData - Customer details from Call database
+ * @param {number} turnCount - Current turn number (for safety limit)
+ * @returns {object} - { text, intent, extractedData, shouldEnd, nextState }
+ */
+export async function getAIResponse(messages, customerData, turnCount = 0) {
+  try {
+    // ✅ CHECK IF GROQ IS INITIALIZED
+    if (!groqInitialized || !groq) {
+      console.error('❌ [AI] Groq client not initialized');
+      return {
+        text: 'Kshama kijiye, AI service abhi available nahi hai. Baad mein dobara try karenge.',
+        intent: 'error',
+        extractedData: {
+          intent: 'error',
+          hasDate: false,
+          dateValue: '',
+          hasCity: false,
+          cityValue: '',
+          status: 'pending'
+        },
+        shouldEnd: true,
+        nextState: 'error'
+      };
+    }
+
+    // ✅ CHECK SAFETY LIMIT (max 20 turns)
+    if (turnCount >= 20) {
+      console.warn(`⚠️  [AI] Safety limit reached: ${turnCount} turns`);
+      return {
+        text: 'Dhanyavaad! Aapka booking request store ho gaya. Hum jald contact karenge. Namaste!',
+        intent: 'completed',
+        extractedData: {
+          intent: 'completed',
+          status: 'pending',
+          hasDate: false,
+          dateValue: '',
+          hasCity: false,
+          cityValue: ''
+        },
+        shouldEnd: true,
+        nextState: 'safety_limit_reached'
+      };
+    }
+
+    // ✅ BUILD SYSTEM PROMPT WITH CUSTOMER DATA
+    const systemPrompt = buildSystemPrompt(customerData);
+
+    // Format messages for Groq API
+    let formattedMessages = messages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.text
+    }));
+
+    // ✅ HANDLE FIRST MESSAGE: If no messages, add initial prompt
+    if (formattedMessages.length === 0) {
+      formattedMessages = [{
+        role: 'user',
+        content: 'Namaste! Please give me the greeting with service details.'
+      }];
+    }
+
+    // ✅ IMPORTANT: Add system message to the beginning of messages array
+    // Groq API doesn't support 'system' parameter, so we add it as a message
+    const messagesWithSystem = [
+      { role: 'system', content: systemPrompt },
+      ...formattedMessages
+    ];
+
+    console.log(`\n🤖 [AI] Calling Groq API...`);
+    console.log(`   Customer: ${customerData.customerName}`);
+    console.log(`   Machine: ${customerData.machineModel}`);
+    console.log(`   Messages in history: ${formattedMessages.length}`);
+    console.log(`   Turn count: ${turnCount}`);
+
+    let response;
+    try {
+      response = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        max_tokens: 256, // Increased from 150 to prevent truncation of JSON block
+        messages: messagesWithSystem,
+        temperature: 0.7
+      });
+
+      console.log(`✅ [AI] Groq API response received successfully`);
+    } catch (apiError) {
+      console.error(`❌ [AI] Groq API error:`, apiError.message);
+
+      if (apiError.status === 401 || apiError.status === 403) {
+        console.error(`   → Authentication error: Invalid or expired API key`);
+        return getErrorResponse('API key invalid. Admin ko notify kar diya jayega.', 'auth_error');
+      }
+
+      if (apiError.status === 429) {
+        console.error(`   → Rate limit exceeded`);
+        return getErrorResponse('System busy hai. Baad mein try karenge.', 'rate_limit');
+      }
+
+      if (apiError.status === 500) {
+        console.error(`   → Groq server error`);
+        return getErrorResponse('Service down. Baad mein try karenge.', 'server_error');
+      }
+
+      throw apiError;
+    }
+
+    // ✅ EXTRACT AI TEXT FROM RESPONSE
+    const aiText = response.choices?.[0]?.message?.content;
+
+    if (!aiText || aiText.trim().length === 0) {
+      console.error('❌ [AI] Empty response content from Groq');
+      return {
+        text: 'Samajh nahi aaya. Dobara boliye.',
+        intent: 'continue',
+        extractedData: {
+          intent: 'continue',
+          hasDate: false,
+          dateValue: '',
+          hasCity: false,
+          cityValue: '',
+          status: 'pending'
+        },
+        shouldEnd: false,
+        nextState: 'continue'
+      };
+    }
+
+    console.log(`✅ [AI] Response generated: "${aiText.substring(0, 80)}..."`);
+
+    // Parse AI response for booking state
+    const parsed = parseAIResponse(aiText);
+
+    return {
+      text: parsed.text,
+      intent: parsed.intent,
+      extractedData: parsed.extractedData,
+      shouldEnd: parsed.shouldEnd,
+      nextState: parsed.nextState
+    };
+
+  } catch (error) {
+    console.error(`\n❌ [AI] Unhandled error in getAIResponse:`, error.message);
+    console.error(`   Type: ${error.name}`);
+
+    return getErrorResponse('Kshama kijiye, system mein issue hai. Baad mein try karenge.', 'unknown_error');
+  }
+}
+
+/**
+ * ✅ HELPER: Generate error response
+ */
+function getErrorResponse(text, intent = 'error') {
+  return {
+    text,
+    intent,
+    extractedData: {
+      intent,
+      hasDate: false,
+      dateValue: '',
+      hasCity: false,
+      cityValue: '',
+      status: 'pending'
+    },
+    shouldEnd: true,
+    nextState: intent
+  };
+}
+
+/**
+ * ✅ BUILD SYSTEM PROMPT WITH CUSTOMER DETAILS
+ */
+function buildSystemPrompt(customerData) {
+  const serviceCenterList = SERVICE_CENTERS.map(s => s.city_name).join(', ');
+  const exampleCities = "Jaipur, Ajmer, Udaipur";
+
+  let dueDateStr = 'Soon';
+  if (customerData.dueDate) {
+    try {
+      const dueDate = new Date(customerData.dueDate);
+      dueDateStr = dueDate.toLocaleDateString('en-IN');
+    } catch (e) {
+      console.warn('⚠️  Invalid due date:', customerData.dueDate);
+    }
+  }
+
+  // FORCE IST TIME (Current date for the AI)
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const today = new Date(utc + (3600000 * 5.5));
+  const currentDateStr = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
+
+  return `You are Priya, a professional JCB service booking assistant for Rajesh Motors. 
+You speak warm, friendly Hindi/Hinglish. ALWAYS use the name ${customerData.customerName}.
+
+CRITICAL: TODAY IS ${currentDateStr}. 
+Any date suggested must be TODAY or in the FUTURE. NEVER suggest or accept dates in the past. If a past date is mentioned, assume they mean next year.
+
+CRITICAL RULES (Mandatory):
+✅ NO ASSUMPTIONS: NEVER guess, pre-fill, or assume a date or city. "hasDate" and "hasCity" MUST be false and "dateValue"/"cityValue" MUST be empty until the user EXPLICITLY says them.
+✅ JSON: You MUST append the BOOKING_STATE JSON block to the END of EVERY single response.
+✅ NO CITY LISTS: Never list all allowed cities to the customer. Only use 2-3 examples like "${exampleCities}".
+✅ NO OTHER STATUS: "status" MUST ONLY be one of: "pending", "confirmed", "already_done", "declined".
+✅ SPECIFIC DATES: Calculate the SPECIFIC date (e.g., "18 March 2026") for the JSON.
+✅ CONCISE: Max 2 sentences per response. 
+
+CONVERSATION LOGIC & SCENARIOS:
+1. GREETING: "Namaste ${customerData.customerName} ji! Main Priya, Rajesh Motors se. Aapki ${customerData.machineModel} की ${customerData.serviceType} due hai. Kya main ise book kar doon?"
+
+2. MULTI-INFO HANDLING: If the customer provides both DATE and CITY at once (e.g., "Haan parso Jaipur mein kar dena"), skip to FINAL CONFIRMATION immediately. Do not ask for date again.
+
+3. SILENCE HANDLING: If you see "[SILENCE - No response]", say: "${customerData}, kya aap meri awaaz sun pa rahe hain?". If silence continues again, set status to "declined" and say "Theek hai, main aapko baad mein call karwa deti hoon. Dhanyavaad!".
+
+4. QUESTIONS: If the customer asks about price or maintenance, give a 1-sentence expert answer (e.g., "Normal service charge machine condition par depend karta hai"), then immediately ask "Kya main service date book kar doon?" or "Toh phir kaunsi date theek rahegi?".
+
+5. ALREADY DONE: If the customer says "Service already ho gayi", ask "Kab aur kahan karwai thi?". Once they provide info, say "Theek hai, main record up-to-date kar deti hoon. Dhanyavaad!" and set status to "already_done".
+
+6. BUSY/RESCHEDULE: If the customer says "Abhi busy hoon" or "Later", say "Theek hai ${customerData.customerName} ji, main aapko agle hafte call karoon?" or "Main baad mein contact karungi. Dhanyavaad!" and set status to "declined".
+
+7. SPEECH RECOVERY: If input is unclear but sounds like a date (e.g., "call cardina" instead of "kal kar dena"), politely clarify: "Maaf kijiye, kya aap kal service karwana chahte hain?".
+
+8. INVALID CITY: If they name a city NOT in the list below, say: "Kshama kijiye, ye city hamare branch coverage me nahi aati. Kripya apni main registered city btaiye."
+
+9. VAGUE DATES: If they say "Agle hafte" or "Next month", suggest a specific date (e.g., "Theek hai, main 18 March ka slot suggest kar rahi hoon. Kya ye theek rahega?").
+
+STRICT WORKFLOW (Use Smooth Logic):
+- Start with GREETING.
+- Collect DATE (Ask: "Kal, parso ya koi aur date?").
+- Collect CITY (Ask: "Apka Near Service Station Kon Sa hai? Jaise: ${exampleCities}?").
+- Collect FINAL CONFIRMATION (Repeat all details and ask to lock).
+- END call politely.
+
+ALLOWED CITIES (INTERNAL REFERENCE - DO NOT LIST TO CUSTOMER):
+${serviceCenterList}
+
+RESPONSE FORMAT (STRICT):
+BOOKING_STATE: {"intent":"greeting|asking_date|asking_city|confirming|completed|already_done|declined","hasDate":true/false,"dateValue":"DD Month YYYY","hasCity":true/false,"cityValue":"","status":"pending|confirmed|already_done|declined"}
+`;
+}
+
+/**
+ * ✅ PARSE AI RESPONSE - Extract state and determine if call should end
+ */
+function parseAIResponse(aiText) {
+  let text = aiText;
+  let extractedData = {
+    intent: 'continue',
+    hasDate: false,
+    dateValue: '',
+    hasCity: false,
+    cityValue: '',
+    status: 'pending'
+  };
+
+  // Extract BOOKING_STATE JSON from response
+  try {
+    const stateMatch = aiText.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
+    if (stateMatch) {
+      const stateJson = JSON.parse(stateMatch[1]);
+      extractedData = { ...extractedData, ...stateJson };
+
+      // Remove JSON from displayed text
+      text = aiText.split('BOOKING_STATE:')[0].trim();
+
+      console.log(`✅ [PARSE] State: intent=${extractedData.intent}, status=${extractedData.status}`);
+    } else {
+      console.warn('⚠️  [PARSE] No BOOKING_STATE found in response. Using previous context.');
+      // If JSON is missing, we try to preserve what we had or stay in "pending"
+    }
+  } catch (parseError) {
+    console.warn('⚠️  [PARSE] Failed to parse BOOKING_STATE:', parseError.message);
+    // If it's a partial JSON, try to extract as much as possible
+    text = aiText.split('BOOKING_STATE:')[0].trim();
+  }
+
+  // Determine if call should end based on status
+  let shouldEnd = false;
+  let nextState = 'continuing';
+
+  if (extractedData.status === 'confirmed') {
+    shouldEnd = true;
+    nextState = 'confirmed';
+  } else if (extractedData.status === 'already_done') {
+    shouldEnd = true;
+    nextState = 'already_done';
+  } else if (extractedData.status === 'declined') {
+    shouldEnd = true;
+    nextState = 'declined';
+  } else if (extractedData.intent === 'completed') {
+    shouldEnd = true;
+    nextState = 'completed';
+  }
+
+  return {
+    text: text?.trim() || 'Samajh nahi aaya. Dobara boliye.',
+    intent: extractedData.intent || 'continue',
+    extractedData,
+    shouldEnd,
+    nextState
+  };
+}
+
+/**
+ * ✅ MATCH CITY WITH SERVICE CENTER
+ */
+export function matchServiceCenter(cityText) {
+  if (!cityText || cityText.trim().length === 0) return null;
+
+  const text = cityText.toLowerCase().trim();
+
+  // 1. Exact match
+  for (const center of SERVICE_CENTERS) {
+    if (center.city_name.toLowerCase() === text) {
+      return center;
+    }
+  }
+
+  // 2. Common Phonetic/Typo overrides
+  const overrides = {
+    'jaypur': 'JAIPUR',
+    'jaipur': 'JAIPUR',
+    'alwar': 'ALWAR',
+    'ajmer': 'AJMER',
+    'kota': 'KOTA',
+    'sikar': 'SIKAR',
+    'udaipur': 'UDAIPUR',
+    'gauner': 'GONER ROAD',
+    'goner': 'GONER ROAD'
+  };
+
+  if (overrides[text]) {
+    return SERVICE_CENTERS.find(c => c.city_name === overrides[text]);
+  }
+
+  // 3. Prefix match (min 3 chars)
+  for (const center of SERVICE_CENTERS) {
+    const cityName = center.city_name.toLowerCase();
+    if (text.length >= 3 && (cityName.startsWith(text.substring(0, 3)) || text.startsWith(cityName.substring(0, 3)))) {
+      return center;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * ✅ PARSE DATE FROM CUSTOMER INPUT
+ * Handles: kal, parso, day names, dates
+ */
+export function parseDate(dateText) {
+  if (!dateText || dateText.trim().length === 0) return null;
+
+  // Use Date.now() as a base and force IST for accurate "Today"
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const today = new Date(utc + (3600000 * 5.5)); // IST
+  today.setHours(0, 0, 0, 0);
+
+  const text = dateText.toLowerCase().trim();
+
+  // 1. Tomorrow (kal)
+  if (text.includes('kal')) {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow;
+  }
+
+  // 2. Day after tomorrow (parso)
+  if (text.includes('parso')) {
+    const parso = new Date(today);
+    parso.setDate(parso.getDate() + 2);
+    return parso;
+  }
+
+  // 3. Today (aaj)
+  if (text.includes('aaj')) {
+    return today;
+  }
+
+  // 4. Day names
+  const dayMap = {
+    'somvar': 1, 'monday': 1,
+    'mangalwar': 2, 'tuesday': 2,
+    'budhvar': 3, 'wednesday': 3,
+    'guruvar': 4, 'thursday': 4,
+    'shukrabar': 5, 'friday': 5,
+    'shanivar': 6, 'saturday': 6,
+    'ravivar': 0, 'sunday': 0
+  };
+
+  for (const [day, dayIndex] of Object.entries(dayMap)) {
+    if (text.includes(day)) {
+      const target = new Date(today);
+      const daysAhead = (dayIndex - today.getDay() + 7) % 7;
+      target.setDate(target.getDate() + (daysAhead || 7));
+      return target;
+    }
+  }
+
+  // 5. Numeric Date format: "28/2/2026", "28-02", "28.02"
+  const numericMatch = text.match(/(\d{1,2})[\/\-\.](\d{1,2})([\/\-\.](\d{2,4}))?/);
+  if (numericMatch) {
+    const day = parseInt(numericMatch[1]);
+    const month = parseInt(numericMatch[2]) - 1; // 0-indexed
+    const yearMatch = numericMatch[4];
+
+    const target = new Date(today);
+    target.setDate(day);
+    target.setMonth(month);
+    if (yearMatch) {
+      const year = yearMatch.length === 2 ? 2000 + parseInt(yearMatch) : parseInt(yearMatch);
+      target.setFullYear(year);
+    }
+
+    if (target < today) {
+      target.setFullYear(target.getFullYear() + 1);
+    }
+    return target;
+  }
+
+  // 6. Text Date format: "16 feb", "16 March", "28 Feb"
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const dateMatch = text.match(/(\d{1,2})\s*(tarik|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
+
+  if (dateMatch) {
+    const day = parseInt(dateMatch[1]);
+    const monthText = dateMatch[2].substring(0, 3).toLowerCase();
+    const monthIndex = months.indexOf(monthText);
+
+    if (day >= 1 && day <= 31) {
+      const target = new Date(today);
+      target.setDate(day);
+      if (monthIndex !== -1) {
+        target.setMonth(monthIndex);
+      }
+
+      // If the target date is in the past, move to next year
+      if (target < today) {
+        target.setFullYear(target.getFullYear() + 1);
+      }
+      return target;
+    }
+  }
+
+  // 7. Next month / Next week
+  if (text.includes('next') || text.includes('agle') || text.includes('agla')) {
+    const target = new Date(today);
+    if (text.includes('month') || text.includes('mahina') || text.includes('mahine')) {
+      target.setMonth(target.getMonth() + 1);
+    } else {
+      target.setDate(target.getDate() + 7); // Default next week
+    }
+    return target;
+  }
+
+  return null;
+}
+
+/**
+ * ✅ GOOGLE TTS - Generate Audio Buffer
+ */
+export async function generateGoogleTTS(text) {
+  if (!ttsClient) {
+    console.warn('⚠️ Google TTS client not initialized');
+    return null;
+  }
+
+  let cleanText = text;
+  const stateMatch = text.match(/BOOKING_STATE:\s*(\{[\s\S]*?\})/);
+  if (stateMatch) {
+    cleanText = text.split('BOOKING_STATE:')[0].trim();
+  }
+  cleanText = cleanText.replace(/<[^>]*>?/gm, '').replace(/\*/g, '').trim();
+
+  const request = {
+    input: { text: cleanText },
+    voice: { languageCode: 'hi-IN', name: 'hi-IN-Neural2-D' }, // Warm & Professional
+    audioConfig: { audioEncoding: 'MP3', speakingRate: 1.15 }, // Increased speed for snappier responses
+  };
+
+  try {
+    const [response] = await ttsClient.synthesizeSpeech(request);
+    return response.audioContent;
+  } catch (error) {
+    console.error('❌ Google TTS Error:', error);
+    return null;
+  }
+}
+
+export default {
+  getAIResponse,
+  matchServiceCenter,
+  parseDate,
+  generateGoogleTTS
+};
