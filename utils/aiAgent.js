@@ -293,7 +293,7 @@ UNDERSTAND THESE DATES:
 - "agle mahine" = Next month
 
 SIMPLE FLOW:
-1. GREETING: "Namaste ${customerData.customerName} ji! Aapki ${customerData.machineModel} की service book करनी है। Kaunsi date theek hai? Kal, parso, ya agle hafte?"
+1. GREETING: "Namaste ${customerData.customerName} ji! Aapki ${customerData.machineModel} की ${customerData.serviceType}  due है। Kaunsi date ke liye service book karu? Kal, parso, ya agle hafte?"
 2. AFTER DATE: "Theek hai। Ab apne kaunse city mein service karwani hai? ${exampleCities}?"
 3. AFTER CITY: "Perfect! ${customerData.customerName} ji, [DATE] को [CITY] mein service confirm ho gayi। Thanks!" Set status to "confirmed".
 4. IF SILENCE: Repeat the last question. Don't end the call.
